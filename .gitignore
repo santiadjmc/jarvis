@@ -1,0 +1,45 @@
+## Environment and secrets
+.env
+.env.*
+!.env.example
+
+## Node.js / TypeScript
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+## Flutter / Dart
+src/app/.dart_tool/
+src/app/.flutter-plugins
+src/app/.flutter-plugins-dependencies
+src/app/.packages
+src/app/build/
+src/app/**/build/
+src/app/**/.dart_tool/
+src/app/**/generated/
+
+## Android and local machine configuration
+src/app/android/.gradle/
+src/app/android/local.properties
+src/app/android/key.properties
+src/app/android/**/key.properties
+*.keystore
+*.jks
+
+## IDE and OS files
+.idea/
+*.iml
+.vscode/*.code-snippets
+.DS_Store
+Thumbs.db
+
+## Runtime output
+*.log
+src/backend/logs/*
+!src/backend/logs/.gitkeep
