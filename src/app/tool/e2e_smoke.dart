@@ -11,7 +11,6 @@ Future<void> main(List<String> args) async {
   final host = args[0];
   final key = args[1];
   final prompt = args[2];
-  // set E2E_CANCEL_AFTER_THINKING=1 to cancel as soon as thinking tokens flow
   final cancelAfterThinking = Platform.environment['E2E_CANCEL_AFTER_THINKING'] == '1';
 
   final channel = WebSocketChannel.connect(Uri.parse('ws://$host/ws?key=${Uri.encodeQueryComponent(key)}'));

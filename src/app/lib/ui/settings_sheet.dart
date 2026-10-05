@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../chat/chat_controller.dart';
 import '../core/app_config.dart';
+import '../protocol/jarvis_protocol.dart';
 import '../services/ws/connection_controller.dart';
 
 class SettingsSheet extends ConsumerStatefulWidget {
@@ -17,6 +20,8 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
   late final TextEditingController _keyController;
   late final TextEditingController _modelController;
   late final TextEditingController _nameController;
+  StreamSubscription<ServerMessage>? _configSub;
+  List<String> _availableModels = [];
 
   @override
   void initState() {
@@ -26,10 +31,26 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
     _keyController = TextEditingController(text: cfg.apiKey ?? '');
     _modelController = TextEditingController(text: cfg.model ?? '');
     _nameController = TextEditingController(text: cfg.deviceName ?? '');
+
+    final connection = ref.read(connectionControllerProvider.notifier);
+    if (ref.read(connectionControllerProvider).status == ConnectionStatus.connected) {
+      _configSub = connection.messages.listen((msg) {
+        if (msg is! ConfigResponseMessage || msg.key != 'models') return;
+        final value = msg.value;
+        if (value is! List) return;
+        final names = value
+            .map((e) => e is Map ? e['name']?.toString() : e.toString())
+            .whereType<String>()
+            .toList();
+        if (mounted) setState(() => _availableModels = names);
+      });
+      connection.sendConfigGet('models');
+    }
   }
 
   @override
   void dispose() {
+    _configSub?.cancel();
     _hostController.dispose();
     _keyController.dispose();
     _modelController.dispose();
@@ -54,8 +75,9 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
 
     final connection = ref.read(connectionControllerProvider.notifier);
     final cfg = ref.read(settingsControllerProvider);
+    final notConnected = ref.read(connectionControllerProvider).status != ConnectionStatus.connected;
     if (cfg.isConfigured &&
-        (previous.host != cfg.host || previous.apiKey != cfg.apiKey)) {
+        (previous.host != cfg.host || previous.apiKey != cfg.apiKey || notConnected)) {
       await connection.disconnect();
       await connection.connect(cfg.host, cfg.apiKey!);
     }
@@ -121,11 +143,27 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
             controller: _modelController,
             decoration: const InputDecoration(
               labelText: 'Model override (blank = auto)',
-              hintText: 'e.g. mistral:latest',
+              hintText: 'e.g. llama3.2',
               prefixIcon: Icon(Icons.auto_awesome_outlined),
               border: OutlineInputBorder(),
             ),
           ),
+          if (_availableModels.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final name in _availableModels)
+                  ActionChip(
+                    label: Text(name, style: const TextStyle(fontSize: 12)),
+                    backgroundColor: const Color(0xFF101830),
+                    side: const BorderSide(color: Colors.white12),
+                    onPressed: () => setState(() => _modelController.text = name),
+                  ),
+              ],
+            ),
+          ],
           const SizedBox(height: 12),
           TextField(
             controller: _nameController,

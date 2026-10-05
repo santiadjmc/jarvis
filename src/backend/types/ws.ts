@@ -163,9 +163,11 @@ export interface VoiceResponseMessage {
     type: "voice";
     id: string;
     requestId: string;
-    audio: string;
-    format: "pcm" | "opus" | "wav";
-    sampleRate: number;
+    seq: number;
+    final: boolean;
+    audio?: string;
+    format?: "pcm" | "opus" | "wav";
+    sampleRate?: number;
 }
 
 export interface ErrorMessage {

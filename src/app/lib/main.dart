@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 
-import 'chat/chat_controller.dart';
 import 'core/app_config.dart';
 import 'services/ws/connection_controller.dart';
 import 'ui/chat_screen.dart';
@@ -64,15 +63,13 @@ class _HomeRouterState extends ConsumerState<HomeRouter> {
   Widget build(BuildContext context) {
     final connection = ref.watch(connectionControllerProvider);
     final config = ref.watch(settingsControllerProvider);
-    final hasSession = ref.watch(chatControllerProvider.select((s) => s.messages.isNotEmpty));
 
     if (config.isConfigured && !_autoConnectTried && connection.status == ConnectionStatus.disconnected) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoConnect());
     }
 
-    if (connection.status == ConnectionStatus.connected || hasSession) {
-      return const ChatScreen();
-    }
-    return const SetupScreen();
+    final showChat =
+        connection.status == ConnectionStatus.connected || connection.status == ConnectionStatus.retrying;
+    return showChat ? const ChatScreen() : const SetupScreen();
   }
 }

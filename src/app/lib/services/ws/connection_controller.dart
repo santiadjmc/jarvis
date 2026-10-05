@@ -45,6 +45,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   bool _manualClose = false;
   String? _host;
   String? _apiKey;
+  DateTime? _lastPingSentAt;
   final _uuid = const Uuid();
 
   Stream<ServerMessage> get messages => _messages.stream;
@@ -67,13 +68,30 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed || _manualClose || _host == null || _apiKey == null) return;
+  void didChangeAppLifecycleState(AppLifecycleState lifecycleState) {
+    if (_manualClose || _host == null || _apiKey == null) return;
+    if (lifecycleState == AppLifecycleState.paused || lifecycleState == AppLifecycleState.hidden) {
+      _inactivityTimer?.cancel();
+      return;
+    }
+    if (lifecycleState != AppLifecycleState.resumed) return;
+    if (state.status == ConnectionStatus.connected) {
+      _resetInactivityCheck();
+      sendPing();
+      return;
+    }
+    if (state.status == ConnectionStatus.connecting) return;
     debugPrint('Jarvis reconnecting after app resume');
     _open();
   }
 
   Future<bool> connect(String host, String apiKey) async {
+    if (state.status == ConnectionStatus.connecting &&
+        _connectResult != null &&
+        _host == host &&
+        _apiKey == apiKey) {
+      return _connectResult!.future;
+    }
     _manualClose = false;
     _reconnectAttempt = 0;
     _host = host;
@@ -176,7 +194,14 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
         }
         _resetInactivityCheck();
         try {
-          _messages.add(ServerMessage.fromRaw(raw is String ? raw : utf8.decode(raw)));
+          final parsed = ServerMessage.fromRaw(raw is String ? raw : utf8.decode(raw));
+          if (parsed is PongMessage) {
+            final sentAt = _lastPingSentAt;
+            if (sentAt != null) {
+              state = state.copyWith(latencyMs: DateTime.now().difference(sentAt).inMilliseconds);
+            }
+          }
+          _messages.add(parsed);
         } on FormatException catch (e) {
           _messages.addError(e);
         }
@@ -259,6 +284,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   }
 
   void sendPing() {
+    _lastPingSentAt = DateTime.now();
     _send(JsonEncoder().convert(PingMessage(
       id: _uuid.v4(),
       timestamp: DateTime.now().millisecondsSinceEpoch,

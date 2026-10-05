@@ -1,5 +1,5 @@
 import modelManager from "./ModelManager";
-import ollamaClient from "./OllamaClient";
+import llmClient from "./LLMClient";
 import Log from "../Log";
 
 export type RouteTier = "fast" | "deep";
@@ -71,7 +71,7 @@ class ModelRouter {
     private async classifyWithFastModel(content: string): Promise<boolean | null> {
         const fast = modelManager.getActive();
         try {
-            const reply = await ollamaClient.chat({
+            const reply = await llmClient.chat({
                 model: fast,
                 messages: [
                     { role: "system", content: CLASSIFIER_SYSTEM_PROMPT },

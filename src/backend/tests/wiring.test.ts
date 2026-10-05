@@ -3,7 +3,7 @@ import test from "node:test";
 import conversationManager from "../ai/ConversationManager";
 import streamManager from "../server/ws/StreamManager";
 import deviceRegistry from "../server/ws/DeviceRegistry";
-import { streamDelta } from "../ai/OllamaClient";
+import { streamDelta } from "../ai/LLMClient";
 
 test("streams retain the client request id and reject duplicate active ids", () => {
     const requestId = crypto.randomUUID();

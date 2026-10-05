@@ -19,6 +19,7 @@ class TtsController extends Notifier<TtsState> {
   AudioPlayer? _player;
   Future<void> _queue = Future<void>.value();
   int _generation = 0;
+  void Function()? _onDrained;
 
   @override
   TtsState build() {
@@ -29,12 +30,16 @@ class TtsController extends Notifier<TtsState> {
     return const TtsState();
   }
 
-  void enqueue(Uint8List wav) {
+  void setOnDrained(void Function()? callback) {
+    _onDrained = callback;
+  }
+
+  void enqueue(Uint8List wav, {bool isFinal = false}) {
     final gen = _generation;
     _queue = _queue.then((_) async {
       if (gen != _generation) return;
-      if (wav.isEmpty) return;
-      await _playOnce(wav);
+      if (wav.isNotEmpty) await _playOnce(wav);
+      if (isFinal && gen == _generation) _onDrained?.call();
     });
   }
 
@@ -57,10 +62,13 @@ class TtsController extends Notifier<TtsState> {
       await player.setAudioSource(AudioSource.uri(Uri.file(file.path)));
       state = const TtsState(status: TtsStatus.playing);
       await player.play();
+      await player.playerStateStream.firstWhere(
+        (s) => s.processingState == ProcessingState.completed || race != _generation,
+      );
     } catch (_) {
     } finally {
-      if (file != null) unawaited(file.delete());
-      if (ref.mounted) state = const TtsState();
+      if (file != null) unawaited(file.delete().catchError((_) => file!));
+      if (ref.mounted && race == _generation) state = const TtsState();
     }
   }
 }

@@ -1,4 +1,5 @@
-import ollamaClient from "./OllamaClient";
+import llmClient from "./LLMClient";
+import { getAIConfig } from "./config";
 import Log from "../Log";
 
 interface ModelConfig {
@@ -17,12 +18,21 @@ class ModelManager {
     private fallbackModels: string[] = [];
 
     constructor() {
-        this.activeModel = process.env.OLLAMA_DEFAULT_MODEL || "mistral:latest";
-        this.deepModel = process.env.OLLAMA_DEEP_MODEL || "mistral:latest";
+        const cfg = getAIConfig();
+        this.activeModel = cfg.defaultModel;
+        this.deepModel = cfg.deepModel;
         this.registerDefaults();
     }
 
     private registerDefaults(): void {
+        this.register({
+            name: "llama3.2",
+            displayName: "Llama 3.2",
+            maxContext: 128000,
+            supportsTools: true,
+            supportsStreaming: true,
+            isEmbedding: false,
+        });
         this.register({
             name: "llama3.1",
             displayName: "Llama 3.1",
@@ -35,6 +45,14 @@ class ModelManager {
             name: "llama3.1:8b",
             displayName: "Llama 3.1 8B",
             maxContext: 128000,
+            supportsTools: true,
+            supportsStreaming: true,
+            isEmbedding: false,
+        });
+        this.register({
+            name: "mistral:latest",
+            displayName: "Mistral",
+            maxContext: 32000,
             supportsTools: true,
             supportsStreaming: true,
             isEmbedding: false,
@@ -109,7 +127,7 @@ class ModelManager {
 
     async syncWithOllama(): Promise<void> {
         try {
-            const remoteModels = await ollamaClient.listModels();
+            const remoteModels = await llmClient.listModels();
             for (const remote of remoteModels) {
                 if (!this.models.has(remote.name)) {
                     this.register({

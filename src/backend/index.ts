@@ -7,9 +7,11 @@ import modelManager from "./ai/ModelManager";
 import messageRouter from "./server/ws/MessageRouter";
 import connectionManager from "./server/ws/ConnectionManager";
 import deviceRegistry from "./server/ws/DeviceRegistry";
+import streamManager from "./server/ws/StreamManager";
 import approvalBroker from "./tools/ApprovalBroker";
 import resultBroker from "./tools/ResultBroker";
-import ollamaClient from "./ai/OllamaClient";
+import llmClient from "./ai/LLMClient";
+import { getAIConfig } from "./ai/config";
 import cacheManager from "./managers/CacheManager";
 import ttsService from "./voice/TtsService";
 import { getLocalAddresses } from "./utils/network";
@@ -61,6 +63,8 @@ async function boot(): Promise<void> {
                     type: "voice",
                     id: crypto.randomUUID(),
                     requestId: message.id,
+                    seq: 1,
+                    final: true,
                     audio: synth.audio.toString("base64"),
                     format: synth.format,
                     sampleRate: synth.sampleRate,
@@ -148,20 +152,26 @@ async function boot(): Promise<void> {
     const server = new Server(PORT, HOST);
     await server.start();
 
-    const ollamaAvailable = await ollamaClient.isAvailable();
-    if (ollamaAvailable) {
-        Log.info("Ollama connection verified");
+    setInterval(() => {
+        const cleaned = streamManager.cleanupStale();
+        if (cleaned > 0) Log.warn("Swept stale streams", { count: cleaned });
+    }, 60_000);
+
+    const aiConfig = getAIConfig();
+    const llmAvailable = await llmClient.isAvailable();
+    if (llmAvailable) {
+        Log.info("LLM endpoint connection verified", { baseUrl: aiConfig.baseUrl });
         await modelManager.syncWithOllama();
 
         const activeModel = modelManager.getActive();
         Log.info(`Loading ${activeModel} into memory...`, { model: activeModel });
-        const chatWarmupMs = await ollamaClient.warmup(activeModel);
+        const chatWarmupMs = await llmClient.warmup(activeModel);
         if (chatWarmupMs > 0) Log.info("Chat model warm", { model: activeModel, loadMs: chatWarmupMs });
 
         startKeepWarmWatchdog();
     } else {
-        Log.warn("Ollama not available - AI features will not work until Ollama is started", {
-            url: process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
+        Log.warn("LLM endpoint not reachable - AI features will not work until it is started", {
+            baseUrl: aiConfig.baseUrl,
         });
     }
 
@@ -169,7 +179,8 @@ async function boot(): Promise<void> {
         port: PORT,
         host: HOST,
         lan: getLocalAddresses().ipv4,
-        ollama: ollamaAvailable ? "connected" : "disconnected",
+        llm: llmAvailable ? "connected" : "disconnected",
+        baseUrl: aiConfig.baseUrl,
         model: modelManager.getActive(),
     });
 
@@ -238,7 +249,7 @@ function startKeepWarmWatchdog(): void {
 
     setInterval(async () => {
         const model = modelManager.getActive();
-        const loaded = await ollamaClient.isModelLoaded(model).catch(() => false);
+        const loaded = await llmClient.isModelLoaded(model).catch(() => false);
         if (loaded) return;
 
         const now = Date.now();
@@ -246,7 +257,7 @@ function startKeepWarmWatchdog(): void {
 
         lastWarmupAttemptAt = now;
         Log.warn(`Model ${model} no longer loaded, reloading into memory`, { model });
-        const ms = await ollamaClient.warmup(model);
+        const ms = await llmClient.warmup(model);
         if (ms > 0) Log.info("Chat model re-warmed", { model, loadMs: ms });
     }, CHECK_INTERVAL);
 }

@@ -35,6 +35,7 @@ export interface OllamaMessage {
     images?: string[];
     tool_calls?: OllamaToolCall[];
     tool_name?: string;
+    tool_call_id?: string;
 }
 
 export interface OllamaTool {
@@ -47,6 +48,7 @@ export interface OllamaTool {
 }
 
 export interface OllamaToolCall {
+    id?: string;
     type: "function";
     function: {
         name: string;
@@ -111,6 +113,7 @@ export interface ConversationMessage {
     toolCalls?: OllamaToolCall[];
     toolResults?: unknown[];
     tool_name?: string;
+    tool_call_id?: string;
     usage?: {
         promptTokens: number;
         completionTokens: number;

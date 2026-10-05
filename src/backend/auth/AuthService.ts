@@ -45,7 +45,7 @@ class AuthService {
 
     private hasHash(hash: string): boolean {
         for (const apiKey of this.apiKeys.values()) {
-            if (apiKey.keyHash === hash) return true;
+            if (this.hashesEqual(apiKey.keyHash, hash)) return true;
         }
         return false;
     }
@@ -79,7 +79,7 @@ class AuthService {
         const keyHash = this.hashKey(key);
 
         for (const apiKey of this.apiKeys.values()) {
-            if (apiKey.keyHash === keyHash) {
+            if (this.hashesEqual(apiKey.keyHash, keyHash)) {
                 if (apiKey.revoked) {
                     return { success: false, error: "API key has been revoked" };
                 }
@@ -150,6 +150,13 @@ class AuthService {
 
     private hashKey(key: string): string {
         return crypto.createHash("sha256").update(key).digest("hex");
+    }
+
+    private hashesEqual(a: string, b: string): boolean {
+        const bufA = Buffer.from(a, "hex");
+        const bufB = Buffer.from(b, "hex");
+        if (bufA.length !== bufB.length) return false;
+        return crypto.timingSafeEqual(bufA, bufB);
     }
 }
 

@@ -9,7 +9,7 @@ class ConnectionManager {
     private pongCheckTimer: NodeJS.Timeout | null = null;
     private readonly HEARTBEAT_INTERVAL = 30000;
     private readonly CLIENT_TIMEOUT = 60000;
-    private readonly PONG_WINDOW = 35000;
+    private readonly PONG_WINDOW = 20000;
 
     start(): void {
         this.heartbeatTimer = setInterval(() => this.sweepClients(), this.HEARTBEAT_INTERVAL);

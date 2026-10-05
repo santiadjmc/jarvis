@@ -599,7 +599,7 @@ export default class ProcessManager {
 if (require.main === module) {
     const version = (() => {
         try {
-            const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8"));
+            const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8"));
             return typeof pkg.version === "string" ? pkg.version : "0.0.0";
         } catch {
             return "0.0.0";
@@ -608,9 +608,9 @@ if (require.main === module) {
 
     console.log("");
     try {
-        console.log(cyan(figlet.textSync("BarnieBot", { font: "Standard" })));
+        console.log(cyan(figlet.textSync("JARVIS", { font: "Standard" })));
     } catch {
-        console.log(cyan("BarnieBot"));
+        console.log(cyan("JARVIS"));
     }
     console.log(cyan(`Process Manager v${version}`));
     console.log("═".repeat(50));

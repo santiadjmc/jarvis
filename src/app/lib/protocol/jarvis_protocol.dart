@@ -297,23 +297,29 @@ class VoiceResponseMessage extends ServerMessage {
   const VoiceResponseMessage({
     required this.id,
     required this.requestId,
-    required this.audio,
-    required this.format,
-    required this.sampleRate,
+    required this.seq,
+    required this.isFinal,
+    this.audio,
+    this.format,
+    this.sampleRate,
   });
 
   final String id;
   final String requestId;
-  final String audio;
-  final String format;
-  final int sampleRate;
+  final int seq;
+  final bool isFinal;
+  final String? audio;
+  final String? format;
+  final int? sampleRate;
 
   factory VoiceResponseMessage.fromJson(Map<String, dynamic> json) => VoiceResponseMessage(
         id: json['id'] as String,
         requestId: json['requestId'] as String,
-        audio: json['audio'] as String,
-        format: json['format'] as String,
-        sampleRate: json['sampleRate'] as int,
+        seq: json['seq'] as int? ?? 1,
+        isFinal: json['final'] as bool? ?? true,
+        audio: json['audio'] as String?,
+        format: json['format'] as String?,
+        sampleRate: json['sampleRate'] as int?,
       );
 }
 

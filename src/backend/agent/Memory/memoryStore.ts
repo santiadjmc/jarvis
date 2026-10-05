@@ -2,7 +2,7 @@ import { v4 as uuid } from "uuid";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
-import ollamaClient from "../../ai/OllamaClient";
+import llmClient from "../../ai/LLMClient";
 import Log from "../../Log";
 
 export interface MemoryEntry {
@@ -42,7 +42,7 @@ function save(data: MemoryFile): void {
 
 async function embed(text: string): Promise<number[] | null> {
     try {
-        return await ollamaClient.embedSingle(text);
+        return await llmClient.embedSingle(text);
     } catch (err: any) {
         Log.warn("Memory embedding failed", { error: err.message });
         return null;

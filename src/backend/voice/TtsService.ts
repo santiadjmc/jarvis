@@ -9,6 +9,14 @@ import { PiperEngine } from "./PiperEngine";
 const MAX_TEXT_CHARS = 1500;
 const MAX_CHUNK_CHARS = 500;
 
+export function extractSpeakableSentences(buffer: string): { complete: string; remainder: string } {
+    const matches = [...buffer.matchAll(/[.!?](?:\s+|$)|\n+/g)];
+    if (matches.length === 0) return { complete: "", remainder: buffer };
+    const last = matches[matches.length - 1];
+    const cutoff = last.index! + last[0].length;
+    return { complete: buffer.slice(0, cutoff), remainder: buffer.slice(cutoff) };
+}
+
 class TtsService {
     private piper: PiperEngine | null = null;
     private cacheDir = join(process.env.JARVIS_DATA_DIR || join(homedir(), ".local", "share", "jarvis"), "tts");

@@ -12,9 +12,11 @@ export interface ServerConfig {
         jwtExpiresIn: string;
         apiKeyPrefix: string;
     };
-    ollama: {
+    ai: {
         baseUrl: string;
+        apiKey: string;
         defaultModel: string;
+        deepModel: string;
         embeddingModel: string;
         timeout: number;
     };
@@ -33,10 +35,12 @@ export interface EnvironmentConfig {
     JWT_SECRET: string;
     JWT_EXPIRES_IN: string;
     API_KEY_PREFIX: string;
-    OLLAMA_BASE_URL: string;
-    OLLAMA_DEFAULT_MODEL: string;
+    AI_BASE_URL: string;
+    AI_API_KEY: string;
+    AI_MODEL: string;
+    AI_DEEP_MODEL: string;
     OLLAMA_EMBEDDING_MODEL: string;
-    OLLAMA_TIMEOUT: number;
+    AI_TIMEOUT: number;
     TTS_ENABLED: boolean;
     TTS_ENGINE: "piper" | "elevenlabs" | "edge";
     TTS_VOICE: string;

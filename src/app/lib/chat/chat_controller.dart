@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -11,6 +12,7 @@ import '../protocol/jarvis_protocol.dart';
 import '../services/ws/connection_controller.dart';
 import '../services/device_tools/device_tool_executor.dart';
 import '../services/voice/tts_controller.dart';
+import '../services/voice/voice_controller.dart';
 import '../core/app_config.dart';
 
 enum MessageRole { user, assistant, error }
@@ -169,19 +171,34 @@ class ChatMessage {
 }
 
 class ChatState {
-  const ChatState({this.messages = const [], this.sessionId, this.online = false, this.pendingError});
+  const ChatState({
+    this.messages = const [],
+    this.sessionId,
+    this.online = false,
+    this.pendingError,
+    this.continuousVoice = false,
+  });
 
   final List<ChatMessage> messages;
   final String? sessionId;
   final bool online;
   final String? pendingError;
+  final bool continuousVoice;
 
-  ChatState copyWith({List<ChatMessage>? messages, String? sessionId, bool? online, String? pendingError, bool clearError = false}) {
+  ChatState copyWith({
+    List<ChatMessage>? messages,
+    String? sessionId,
+    bool? online,
+    String? pendingError,
+    bool? continuousVoice,
+    bool clearError = false,
+  }) {
     return ChatState(
       messages: messages ?? this.messages,
       sessionId: sessionId ?? this.sessionId,
       online: online ?? this.online,
       pendingError: clearError ? null : (pendingError ?? this.pendingError),
+      continuousVoice: continuousVoice ?? this.continuousVoice,
     );
   }
 }
@@ -197,6 +214,9 @@ class ChatController extends Notifier<ChatState> {
   List<ChatMessage> _messages = [];
   final Map<String, String> _callToMessage = {};
   final Set<String> _runningCalls = {};
+  String? _voiceOriginatedRequestId;
+  Timer? _relistenFallback;
+  bool _ttsHooked = false;
 
   @override
   ChatState build() {
@@ -277,8 +297,39 @@ class ChatController extends Notifier<ChatState> {
     messages.listen((ServerMessage msg) => _handle(msg), onError: (Object e) {
       state = state.copyWith(pendingError: e.toString());
     });
+    if (!_ttsHooked) {
+      _ttsHooked = true;
+      ref.read(ttsControllerProvider.notifier).setOnDrained(_onSpeechDrained);
+    }
     ref.onDispose(() {
       _subscribed = false;
+    });
+  }
+
+  void setContinuousVoice(bool value) {
+    state = state.copyWith(continuousVoice: value);
+    if (!value) {
+      _relistenFallback?.cancel();
+      _relistenFallback = null;
+      _voiceOriginatedRequestId = null;
+    }
+  }
+
+  void _onSpeechDrained() {
+    _relistenFallback?.cancel();
+    _relistenFallback = null;
+    _maybeRelisten();
+  }
+
+  void _maybeRelisten() {
+    if (!state.continuousVoice) return;
+    if (_voiceOriginatedRequestId == null) return;
+    _voiceOriginatedRequestId = null;
+    if (_activeRequestId != null) return;
+    if (!state.online) return;
+    final cfg = ref.read(settingsControllerProvider);
+    ref.read(voiceControllerProvider.notifier).start((text) {
+      send(text, model: cfg.model, voice: true);
     });
   }
 
@@ -474,6 +525,10 @@ class ChatController extends Notifier<ChatState> {
     final completed =
         _settleStrayTools(bubble.asCompleteWith(end.fullResponse, finalModel: end.model), ToolStepStatus.failed, 'No result received');
     _replace(completed);
+    if (state.continuousVoice && end.requestId == _voiceOriginatedRequestId) {
+      _relistenFallback?.cancel();
+      _relistenFallback = Timer(const Duration(milliseconds: 600), _maybeRelisten);
+    }
   }
 
   void _onStatus(StatusMessage status) {
@@ -507,9 +562,19 @@ class ChatController extends Notifier<ChatState> {
     final isReplay = _messages.any((m) => m.id == voice.requestId);
     final cfg = ref.read(settingsControllerProvider);
     if (!isReplay && !cfg.voiceReplies) return;
-    try {
-      ref.read(ttsControllerProvider.notifier).enqueue(base64Decode(voice.audio));
-    } catch (_) {}
+    if (voice.requestId == _voiceOriginatedRequestId) {
+      _relistenFallback?.cancel();
+      _relistenFallback = null;
+    }
+    Uint8List bytes = Uint8List(0);
+    if (voice.audio != null) {
+      try {
+        bytes = base64Decode(voice.audio!);
+      } catch (e) {
+        debugPrint('Jarvis: failed to decode voice audio: $e');
+      }
+    }
+    ref.read(ttsControllerProvider.notifier).enqueue(bytes, isFinal: voice.isFinal);
   }
 
   void _replace(ChatMessage updated) {
@@ -520,7 +585,10 @@ class ChatController extends Notifier<ChatState> {
 
   Future<void> send(String text, {String? model, bool voice = false}) async {
     if (text.trim().isEmpty) return;
-    if (_activeRequestId != null) return;
+    if (_activeRequestId != null) {
+      state = state.copyWith(pendingError: "Jarvis is still answering — tap stop first, or wait.");
+      return;
+    }
     final requestId = _uuid.v4();
     final sent = ref.read(connectionControllerProvider.notifier).sendChat(
           id: requestId,
@@ -534,6 +602,7 @@ class ChatController extends Notifier<ChatState> {
       return;
     }
     _activeRequestId = requestId;
+    _voiceOriginatedRequestId = voice ? requestId : null;
     final userMsg = ChatMessage(id: _uuid.v4(), role: MessageRole.user, content: text, complete: true);
     _messages = [..._messages, userMsg];
     state = state.copyWith(messages: _messages, clearError: true);
@@ -565,6 +634,10 @@ class ChatController extends Notifier<ChatState> {
       ));
     }
     _activeRequestId = null;
+    _voiceOriginatedRequestId = null;
+    _relistenFallback?.cancel();
+    _relistenFallback = null;
+    ref.read(ttsControllerProvider.notifier).clear();
   }
 
   void clearPendingError() {
@@ -574,6 +647,9 @@ class ChatController extends Notifier<ChatState> {
   Future<void> reset() async {
     _messages = [];
     _activeRequestId = null;
+    _voiceOriginatedRequestId = null;
+    _relistenFallback?.cancel();
+    _relistenFallback = null;
     _callToMessage.clear();
     _runningCalls.clear();
     _sessionId = _uuid.v4();

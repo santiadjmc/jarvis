@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../chat/chat_controller.dart';
 import '../core/app_config.dart';
 import '../protocol/jarvis_protocol.dart' show ChatStatus;
+import '../services/voice/tts_controller.dart';
 import '../services/voice/voice_controller.dart';
 import '../services/ws/connection_controller.dart';
 import 'settings_sheet.dart';
@@ -67,7 +68,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         title: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.hexagon_outlined, color: Color(0xFF00E5FF), size: 20),
+            _PulsingCore(),
             SizedBox(width: 8),
             Text('JARVIS'),
           ],
@@ -82,6 +83,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       ? 'connecting…'
                       : 'reconnecting…',
                   style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                ),
+              ),
+            )
+          else if (connection.latencyMs != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.circle, size: 8, color: _latencyColor(connection.latencyMs!)),
+                    const SizedBox(width: 6),
+                    Text(
+                      '${connection.latencyMs}ms',
+                      style: const TextStyle(color: Colors.white38, fontSize: 12),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -114,6 +132,61 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           _Composer(),
         ],
       ),
+    );
+  }
+}
+
+Color _latencyColor(int latencyMs) {
+  if (latencyMs < 150) return const Color(0xFF7CF29D);
+  if (latencyMs < 400) return const Color(0xFFFFB74D);
+  return const Color(0xFFFF8A80);
+}
+
+class _PulsingCore extends ConsumerStatefulWidget {
+  const _PulsingCore();
+
+  @override
+  ConsumerState<_PulsingCore> createState() => _PulsingCoreState();
+}
+
+class _PulsingCoreState extends ConsumerState<_PulsingCore> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 2),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final busy = ref.watch(chatControllerProvider.select((s) => s.messages.any((m) => !m.complete)));
+    final speaking = ref.watch(ttsControllerProvider).status == TtsStatus.playing;
+    final active = busy || speaking;
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        final t = active ? _controller.value : 0.0;
+        return Container(
+          width: 20,
+          height: 20,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.black.withValues(alpha: 0.4),
+            border: Border.all(color: const Color(0xFF00E5FF), width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF00E5FF).withValues(alpha: 0.25 + t * 0.35),
+                blurRadius: 6 + t * 10,
+                spreadRadius: t * 2,
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -233,31 +306,22 @@ class _AssistantBubbleState extends ConsumerState<_AssistantBubble> {
             const SizedBox(height: 8),
           ],
           if (message.content.isNotEmpty)
-            streaming
-                ? SelectableText(
-                    message.content,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      height: 1.5,
-                    ),
-                  )
-                : MarkdownBody(
-                    data: message.content,
-                    styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-                      p: const TextStyle(color: Colors.white, fontSize: 15, height: 1.5),
-                      code: const TextStyle(
-                        color: Color(0xFF80FFEA),
-                        backgroundColor: Color(0xFF0B1020),
-                        fontFamily: 'monospace',
-                      ),
-                      codeblockDecoration: BoxDecoration(
-                        color: const Color(0xFF0B1020),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                    selectable: true,
-                  )
+            MarkdownBody(
+              data: message.content,
+              styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                p: const TextStyle(color: Colors.white, fontSize: 15, height: 1.5),
+                code: const TextStyle(
+                  color: Color(0xFF80FFEA),
+                  backgroundColor: Color(0xFF0B1020),
+                  fontFamily: 'monospace',
+                ),
+                codeblockDecoration: BoxDecoration(
+                  color: const Color(0xFF0B1020),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              selectable: true,
+            )
           else if (streaming && !hasActivity)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 4),
@@ -270,14 +334,27 @@ class _AssistantBubbleState extends ConsumerState<_AssistantBubble> {
           if (!streaming && message.content.isNotEmpty)
             Align(
               alignment: Alignment.topRight,
-              child: IconButton(
-                constraints: const BoxConstraints(),
-                padding: EdgeInsets.zero,
-                icon: const Icon(Icons.volume_up_outlined, size: 18, color: Colors.white38),
-                tooltip: 'Read aloud',
-                onPressed: () => ref
-                    .read(chatControllerProvider.notifier)
-                    .speakMessage(message.id, message.content),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (message.model != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: Text(
+                        message.model!,
+                        style: const TextStyle(color: Colors.white24, fontSize: 10.5, fontStyle: FontStyle.italic),
+                      ),
+                    ),
+                  IconButton(
+                    constraints: const BoxConstraints(),
+                    padding: EdgeInsets.zero,
+                    icon: const Icon(Icons.volume_up_outlined, size: 18, color: Colors.white38),
+                    tooltip: 'Read aloud',
+                    onPressed: () => ref
+                        .read(chatControllerProvider.notifier)
+                        .speakMessage(message.id, message.content),
+                  ),
+                ],
               ),
             ),
         ],
@@ -320,7 +397,9 @@ class _ToolCardState extends ConsumerState<_ToolCard> {
   @override
   Widget build(BuildContext context) {
     final step = widget.step;
-    final params = step.params.entries.map((e) => '${e.key}=${_short(e.value)}').join(', ');
+    final params = step.params.entries
+        .map((e) => '${e.key}=${step.requiresApproval ? e.value : _short(e.value)}')
+        .join(', ');
 
     final (icon, color) = switch (step.status) {
       ToolStepStatus.running => (Icons.build, const Color(0xFF00E5FF)),
@@ -392,7 +471,12 @@ class _ToolCardState extends ConsumerState<_ToolCard> {
           ),
           if (params.isNotEmpty) ...[
             const SizedBox(height: 4),
-            Text(params, style: const TextStyle(color: Colors.white38, fontSize: 11), overflow: TextOverflow.ellipsis),
+            step.requiresApproval
+                ? SelectableText(
+                    params,
+                    style: const TextStyle(color: Colors.white54, fontFamily: 'monospace', fontSize: 11.5),
+                  )
+                : Text(params, style: const TextStyle(color: Colors.white38, fontSize: 11), overflow: TextOverflow.ellipsis),
           ],
           if (step.error != null) ...[
             const SizedBox(height: 6),
@@ -403,7 +487,7 @@ class _ToolCardState extends ConsumerState<_ToolCard> {
             GestureDetector(
               onTap: () => setState(() => _expanded = !_expanded),
               child: Text(
-                _expanded ? step.result! : '${step.result!.substring(0, step.result!.length > 140 ? 140 : step.result!.length)}${step.result!.length > 140 ? '…  (view)' : ''}',
+                _expanded ? step.result! : '${step.result!.substring(0, step.result!.length > 140 ? 140 : step.result!.length)}${step.result!.length > 140 ? '… (view)' : ''}',
                 style: const TextStyle(color: Colors.white54, fontFamily: 'monospace', fontSize: 11),
               ),
             ),
@@ -661,6 +745,8 @@ class _ComposerState extends ConsumerState<_Composer> {
         ),
         child: Row(
           children: [
+            const _ContinuousVoiceToggle(),
+            const _SpeakingIndicator(),
             _VoiceButton(onFinalText: (text) {
               final cfg = ref.read(settingsControllerProvider);
               ref.read(chatControllerProvider.notifier).send(text, model: cfg.model, voice: cfg.voiceReplies);
@@ -738,16 +824,84 @@ class _VoiceButton extends ConsumerWidget {
         : Icon(listening ? Icons.mic : Icons.mic_none,
             color: listening ? const Color(0xFFFF5252) : Colors.white54);
 
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        if (listening)
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: voice.soundLevel),
+            duration: const Duration(milliseconds: 120),
+            builder: (context, level, _) => Transform.scale(
+              scale: 1.0 + level * 0.9,
+              child: Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFFFF5252).withValues(alpha: 0.10 + level * 0.25),
+                ),
+              ),
+            ),
+          ),
+        IconButton(
+          onPressed: unavailable ? null : () {
+            if (listening) {
+              notifier.stop();
+            } else {
+              notifier.start(onFinalText);
+            }
+          },
+          icon: icon,
+          tooltip: listening ? 'Stop listening' : 'Voice input',
+        ),
+      ],
+    );
+  }
+}
+
+class _ContinuousVoiceToggle extends ConsumerWidget {
+  const _ContinuousVoiceToggle();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final active = ref.watch(chatControllerProvider.select((s) => s.continuousVoice));
     return IconButton(
-      onPressed: unavailable ? null : () {
-        if (listening) {
-          notifier.stop();
-        } else {
-          notifier.start(onFinalText);
-        }
-      },
-      icon: icon,
-      tooltip: listening ? 'Stop listening' : 'Voice input',
+      onPressed: () => ref.read(chatControllerProvider.notifier).setContinuousVoice(!active),
+      icon: Icon(Icons.loop, color: active ? const Color(0xFF00E5FF) : Colors.white38),
+      tooltip: active ? 'Continuous voice mode: on' : 'Continuous voice mode: off',
+    );
+  }
+}
+
+class _SpeakingIndicator extends ConsumerStatefulWidget {
+  const _SpeakingIndicator();
+
+  @override
+  ConsumerState<_SpeakingIndicator> createState() => _SpeakingIndicatorState();
+}
+
+class _SpeakingIndicatorState extends ConsumerState<_SpeakingIndicator> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 650),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final speaking = ref.watch(ttsControllerProvider).status == TtsStatus.playing;
+    if (!speaking) return const SizedBox.shrink();
+    return FadeTransition(
+      opacity: Tween(begin: 0.4, end: 1.0).animate(_controller),
+      child: const Padding(
+        padding: EdgeInsets.only(right: 4),
+        child: Icon(Icons.graphic_eq, color: Color(0xFF00E5FF), size: 18),
+      ),
     );
   }
 }

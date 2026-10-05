@@ -85,7 +85,7 @@ export class PiperEngine {
                 try {
                     const audio = await readFile(outPath);
                     await unlink(outPath).catch(() => {});
-                    resolve({ audio, format: "wav", sampleRate: 22050, durationMs: wavDurationMs(audio) });
+                    resolve({ audio, format: "wav", sampleRate: readSampleRate(audio), durationMs: wavDurationMs(audio) });
                 } catch (err: any) {
                     reject(err);
                 }
@@ -93,6 +93,11 @@ export class PiperEngine {
             child.stdin.end(text);
         });
     }
+}
+
+function readSampleRate(buf: Buffer): number {
+    if (buf.length < 28 || buf.toString("ascii", 0, 4) !== "RIFF") return 22050;
+    return buf.readUInt32LE(24) || 22050;
 }
 
 function wavDurationMs(buf: Buffer): number {

@@ -1,7 +1,7 @@
 import { v4 as uuid } from "uuid";
 import type { AuthenticatedClient, TokenMessage, StreamEndMessage, StatusMessage } from "../types/ws";
 import type { ConversationMessage, OllamaToolCall } from "../types/ai";
-import ollamaClient from "./OllamaClient";
+import llmClient from "./LLMClient";
 import conversationManager from "./ConversationManager";
 import promptBuilder from "./PromptBuilder";
 import modelManager from "./ModelManager";
@@ -12,7 +12,7 @@ import deviceRegistry from "../server/ws/DeviceRegistry";
 import toolRegistry from "../tools/registry";
 import approvalBroker from "../tools/ApprovalBroker";
 import resultBroker from "../tools/ResultBroker";
-import ttsService from "../voice/TtsService";
+import ttsService, { extractSpeakableSentences } from "../voice/TtsService";
 import type { ToolResult } from "../tools/types";
 import { searchMemory } from "../agent/Memory/memoryStore";
 import Log from "../Log";
@@ -36,6 +36,9 @@ You have access to tools to accomplish tasks. Never ask the user for permission 
 Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
     private voiceRequests = new Set<string>();
+    private speechBuffer = new Map<string, string>();
+    private speechSeq = new Map<string, number>();
+    private speechTail = new Map<string, Promise<void>>();
 
     async handleChat(client: AuthenticatedClient, message: any): Promise<void> {
         const requestId = message.id as string;
@@ -89,11 +92,13 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         const turns = maxToolTurns();
         const toolDefs = toolRegistry.defsForOllama();
         const approvalsAuto = autoApprove();
+        const voiceRequested = this.voiceRequests.has(streamId);
 
         this.sendStatus(client.id, tier === "deep" ? "reasoning" : "generating", streamId);
 
         if (tier === "deep") {
             this.sendBridgeMessage(client.id, streamId);
+            if (voiceRequested) this.queueSpeech(client, streamId, "Let me think about it, sir.", false, abortController.signal);
         }
 
         try {
@@ -105,6 +110,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             for (let turn = 0; turn < turns; turn++) {
                 if (abortController.signal.aborted) {
                     streamManager.complete(streamId);
+                    this.clearSpeech(streamId);
                     return;
                 }
 
@@ -132,7 +138,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                 let sawToolCalls = false;
                 let toolCalls: OllamaToolCall[] = [];
 
-                const tokenStream = ollamaClient.chatStream({
+                const tokenStream = llmClient.chatStream({
                     model,
                     messages,
                     stream: true,
@@ -166,6 +172,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                             kind: "assistant",
                         };
                         connectionManager.send(client.id, JSON.stringify(tokenMsg));
+                        if (voiceRequested) this.appendSpeech(client, streamId, abortController.signal, chunk.content);
                     }
 
                     if (Array.isArray(chunk.toolCalls) && chunk.toolCalls.length > 0) {
@@ -176,6 +183,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
                 if (abortController.signal.aborted) {
                     streamManager.complete(streamId);
+                    this.clearSpeech(streamId);
                     return;
                 }
 
@@ -194,16 +202,18 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                     continue;
                 }
 
-                this.finishTurn(client, conversationId, streamId, assistantContent, model);
+                this.finishTurn(client, conversationId, streamId, assistantContent, model, abortController.signal);
                 return;
             }
 
             streamManager.complete(streamId);
+            this.clearSpeech(streamId);
             this.reWarmFastAfterDeep(model);
             this.sendError(client.id, "MAX_TOOL_TURNS", `Stopped after ${turns} tool turns.`, streamId);
         } catch (err: any) {
             if (err.name === "AbortError") {
                 streamManager.complete(streamId);
+                this.clearSpeech(streamId);
                 return;
             }
             Log.error("Agent stream error", err);
@@ -216,6 +226,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             }
 
             streamManager.complete(streamId);
+            this.clearSpeech(streamId);
             this.reWarmFastAfterDeep(model);
             this.sendError(client.id, "STREAM_ERROR", err.message, streamId);
         }
@@ -234,16 +245,17 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
             const name = call.function?.name;
             const params = (call.function?.arguments as Record<string, unknown>) || {};
+            const callId = call.id || `call_${uuid()}`;
             if (!name) {
                 conversationManager.addMessage(conversationId, {
                     role: "tool",
                     content: JSON.stringify({ success: false, error: "Malformed tool call: missing name" }),
                     timestamp: Date.now(),
+                    tool_call_id: callId,
                 });
                 continue;
             }
 
-            const callId = `call_${uuid()}`;
             const spec = toolRegistry.get(name);
             const approvalRequired = spec?.requiresApproval ?? toolRegistry.requiresApproval(name);
 
@@ -298,6 +310,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                 content: toolRegistry.serializeForModel(name, result),
                 timestamp: Date.now(),
                 tool_name: name,
+                tool_call_id: callId,
             });
         }
     }
@@ -326,6 +339,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                 content: toolRegistry.serializeForModel(name, result),
                 timestamp: Date.now(),
                 tool_name: name,
+                tool_call_id: callId,
             });
         };
 
@@ -404,6 +418,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             content: toolRegistry.serializeForModel(name, result),
             timestamp: Date.now(),
             tool_name: name,
+            tool_call_id: callId,
         });
 
         Log.info("Device tool completed", {
@@ -420,6 +435,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         streamId: string,
         assistantContent: string,
         model: string,
+        signal: AbortSignal,
     ): void {
         conversationManager.addMessage(conversationId, {
             role: "assistant",
@@ -440,7 +456,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         streamManager.complete(streamId);
         this.reWarmFastAfterDeep(model);
 
-        this.maybeSendVoice(client, streamId, fullResponse);
+        if (this.voiceRequests.delete(streamId)) this.flushSpeech(client, streamId, signal);
 
         Log.info("Agent turn completed", {
             clientId: client.id,
@@ -468,6 +484,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                 content: m.content,
                 ...(Array.isArray(m.toolCalls) && m.toolCalls.length > 0 ? { toolCalls: m.toolCalls } : {}),
                 ...(m.role === "tool" && m.tool_name ? { tool_name: m.tool_name } : {}),
+                ...(m.role === "tool" && m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
             })),
             recall ? `${conversation.systemPrompt}\n\n${recall}` : conversation.systemPrompt,
         );
@@ -475,7 +492,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         this.sendStatus(client.id, "generating", requestId);
 
         try {
-            const response = await ollamaClient.chat({ model, messages, stream: false, keepAlive });
+            const response = await llmClient.chat({ model, messages, stream: false, keepAlive });
 
             conversationManager.addMessage(conversationId, {
                 role: "assistant",
@@ -494,7 +511,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             };
             connectionManager.send(client.id, JSON.stringify(endMsg));
 
-            this.maybeSendVoice(client, requestId, response);
+            this.maybeSendVoice(client, requestId, response, new AbortController().signal);
 
             Log.info("Chat response completed (non-streaming)", {
                 clientId: client.id,
@@ -537,7 +554,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
     private async summarizeMessages(messages: ConversationMessage[], signal: AbortSignal): Promise<string | null> {
         const prompt = promptBuilder.buildSummaryPrompt(messages);
         try {
-            return await ollamaClient.chat({
+            return await llmClient.chat({
                 model: modelManager.getDeep(),
                 messages: [
                     {
@@ -597,33 +614,85 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         if (model !== modelManager.getDeep()) return;
         const fast = modelManager.getActive();
         setTimeout(() => {
-            ollamaClient.warmup(fast).catch(() => {});
+            llmClient.warmup(fast).catch(() => {});
         }, 250);
     }
 
-    private maybeSendVoice(client: AuthenticatedClient, requestId: string, text: string): void {
+    private maybeSendVoice(client: AuthenticatedClient, requestId: string, text: string, signal: AbortSignal): void {
         if (!this.voiceRequests.delete(requestId)) return;
-        if (!ttsService.ready || !text?.trim()) return;
-        void ttsService
-            .synthesize(text)
-            .then((synth) => {
-                if (!synth) return;
-                connectionManager.send(client.id, JSON.stringify({
+        this.queueSpeech(client, requestId, text, true, signal);
+    }
+
+    private allocSpeechSeq(requestId: string): number {
+        const next = (this.speechSeq.get(requestId) ?? 0) + 1;
+        this.speechSeq.set(requestId, next);
+        return next;
+    }
+
+    private queueSpeech(client: AuthenticatedClient, requestId: string, text: string, final: boolean, signal: AbortSignal): void {
+        if (!ttsService.ready) return;
+        const trimmed = text.trim();
+        if (!trimmed && !final) return;
+
+        const prev = this.speechTail.get(requestId) || Promise.resolve();
+        const next = prev
+            .then(async () => {
+                if (signal.aborted) return;
+                const synth = trimmed ? await ttsService.synthesize(trimmed).catch(() => null) : null;
+                if (signal.aborted) return;
+
+                const payload: Record<string, unknown> = {
                     type: "voice",
                     id: uuid(),
                     requestId,
-                    audio: synth.audio.toString("base64"),
-                    format: synth.format,
-                    sampleRate: synth.sampleRate,
-                }));
+                    seq: this.allocSpeechSeq(requestId),
+                    final,
+                };
+                if (synth) {
+                    payload.audio = synth.audio.toString("base64");
+                    payload.format = synth.format;
+                    payload.sampleRate = synth.sampleRate;
+                }
+                connectionManager.send(client.id, JSON.stringify(payload));
             })
-            .catch((err) => Log.warn("TTS synthesis failed", { error: err.message }));
+            .catch((err) => Log.warn("TTS synthesis failed", { error: err.message }))
+            .finally(() => {
+                if (this.speechTail.get(requestId) === next) this.speechTail.delete(requestId);
+                if (final) this.speechSeq.delete(requestId);
+            });
+
+        this.speechTail.set(requestId, next);
+    }
+
+    private appendSpeech(client: AuthenticatedClient, requestId: string, signal: AbortSignal, delta: string): void {
+        if (!delta) return;
+        const buffer = (this.speechBuffer.get(requestId) || "") + delta;
+        const { complete, remainder } = extractSpeakableSentences(buffer);
+        if (complete) {
+            this.speechBuffer.set(requestId, remainder);
+            this.queueSpeech(client, requestId, complete, false, signal);
+        } else {
+            this.speechBuffer.set(requestId, buffer);
+        }
+    }
+
+    private flushSpeech(client: AuthenticatedClient, requestId: string, signal: AbortSignal): void {
+        const remaining = this.speechBuffer.get(requestId) || "";
+        this.speechBuffer.delete(requestId);
+        this.queueSpeech(client, requestId, remaining, true, signal);
+    }
+
+    private clearSpeech(requestId: string): void {
+        this.speechBuffer.delete(requestId);
+        this.speechSeq.delete(requestId);
+        this.speechTail.delete(requestId);
     }
 
     cancelStream(requestId: string): boolean {
         approvalBroker.abortRequest(requestId);
         resultBroker.abortRequest(requestId);
         this.voiceRequests.delete(requestId);
+        this.clearSpeech(requestId);
         return streamManager.cancel(requestId);
     }
 

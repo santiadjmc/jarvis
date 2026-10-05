@@ -4,6 +4,7 @@ interface BuildableMessage {
     role: string;
     content: string;
     tool_name?: string;
+    tool_call_id?: string;
     toolCalls?: OllamaToolCall[];
 }
 
@@ -35,6 +36,9 @@ When a task requires it, just do it.`;
             }
             if (msg.role === "tool" && msg.tool_name) {
                 entry.tool_name = msg.tool_name;
+            }
+            if (msg.role === "tool" && msg.tool_call_id) {
+                entry.tool_call_id = msg.tool_call_id;
             }
             messages.push(entry);
         }
