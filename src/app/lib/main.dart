@@ -68,8 +68,9 @@ class _HomeRouterState extends ConsumerState<HomeRouter> {
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoConnect());
     }
 
-    final showChat =
-        connection.status == ConnectionStatus.connected || connection.status == ConnectionStatus.retrying;
+    final showChat = connection.status == ConnectionStatus.connected ||
+        (connection.hasConnectedOnce &&
+            (connection.status == ConnectionStatus.retrying || connection.status == ConnectionStatus.connecting));
     return showChat ? const ChatScreen() : const SetupScreen();
   }
 }

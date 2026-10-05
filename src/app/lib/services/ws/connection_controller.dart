@@ -14,17 +14,25 @@ import '../device_tools/device_tool_executor.dart';
 enum ConnectionStatus { disconnected, connecting, connected, retrying }
 
 class ConnectionState {
-  const ConnectionState({required this.status, this.errorMessage, this.latencyMs});
+  const ConnectionState({required this.status, this.errorMessage, this.latencyMs, this.hasConnectedOnce = false});
 
   final ConnectionStatus status;
   final String? errorMessage;
   final int? latencyMs;
+  final bool hasConnectedOnce;
 
-  ConnectionState copyWith({ConnectionStatus? status, String? errorMessage, int? latencyMs, bool clearError = false}) {
+  ConnectionState copyWith({
+    ConnectionStatus? status,
+    String? errorMessage,
+    int? latencyMs,
+    bool? hasConnectedOnce,
+    bool clearError = false,
+  }) {
     return ConnectionState(
       status: status ?? this.status,
       errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
       latencyMs: latencyMs ?? this.latencyMs,
+      hasConnectedOnce: hasConnectedOnce ?? this.hasConnectedOnce,
     );
   }
 }
@@ -99,6 +107,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     await ref.read(settingsControllerProvider.notifier).save(host: host, apiKey: apiKey);
     _connectResult?.complete(false);
     final completer = _connectResult = Completer<bool>();
+    state = state.copyWith(hasConnectedOnce: false);
     _open();
     return completer.future;
   }
@@ -186,7 +195,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
         _connectTimer?.cancel();
         if (state.status != ConnectionStatus.connected) {
           debugPrint('Jarvis WebSocket connected');
-          state = state.copyWith(status: ConnectionStatus.connected, clearError: true);
+          state = state.copyWith(status: ConnectionStatus.connected, clearError: true, hasConnectedOnce: true);
           _startHeartbeat();
           _connectResult?.complete(true);
           _connectResult = null;
