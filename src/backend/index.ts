@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./loadEnv";
 import figlet from "figlet";
 import Server from "./server";
 import aiOrchestrator from "./ai";
