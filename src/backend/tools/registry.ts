@@ -8,6 +8,7 @@ import fileTools from "./implementations/fs";
 import shellTools from "./implementations/shell";
 import webTools from "./implementations/web";
 import memoryTools from "./implementations/memory";
+import scheduleTools from "./implementations/schedule";
 import deviceTools from "./deviceTools";
 import type { ToolResult, ToolResultMessagePayload, ToolSpec } from "./types";
 
@@ -20,7 +21,7 @@ class ToolRegistry {
     private init(): void {
         if (this.initialized) return;
         this.initialized = true;
-        for (const spec of [...systemTools, ...fileTools, ...shellTools, ...webTools, ...memoryTools, ...deviceTools]) {
+        for (const spec of [...systemTools, ...fileTools, ...shellTools, ...webTools, ...memoryTools, ...scheduleTools, ...deviceTools]) {
             this.specs.set(spec.name, spec);
         }
         Log.info("Tool registry initialized", { tools: this.specs.size });
@@ -73,9 +74,14 @@ class ToolRegistry {
         return this.get(name)?.requiresApproval ?? false;
     }
 
+    isSafeForAutonomousRun(name: string): boolean {
+        const spec = this.get(name);
+        return !!spec && !spec.requiresApproval && spec.runtime !== "device";
+    }
+
     categories(): Record<ToolCategory, string[]> {
         this.init();
-        const out = { system: [], web: [], file: [], code: [], memory: [], utility: [] } as Record<ToolCategory, string[]>;
+        const out = { system: [], web: [], file: [], code: [], memory: [], utility: [], schedule: [] } as Record<ToolCategory, string[]>;
         for (const name of this.list()) {
             const spec = this.get(name);
             if (spec) out[spec.category].push(name);
@@ -83,10 +89,11 @@ class ToolRegistry {
         return out;
     }
 
-    defsForOllama(): OllamaTool[] {
+    defsForOllama(opts: { safeOnly?: boolean } = {}): OllamaTool[] {
         this.init();
         return this.list()
             .map(name => this.get(name)!)
+            .filter(spec => !opts.safeOnly || (!spec.requiresApproval && spec.runtime !== "device"))
             .map(spec => ({
                 type: "function" as const,
                 function: {

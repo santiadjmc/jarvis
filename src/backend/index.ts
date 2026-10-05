@@ -14,6 +14,7 @@ import llmClient from "./ai/LLMClient";
 import { getAIConfig } from "./ai/config";
 import cacheManager from "./managers/CacheManager";
 import ttsService from "./voice/TtsService";
+import { listDueTasks } from "./agent/Scheduler/taskStore";
 import { getLocalAddresses } from "./utils/network";
 import Log from "./Log";
 
@@ -157,6 +158,8 @@ async function boot(): Promise<void> {
         if (cleaned > 0) Log.warn("Swept stale streams", { count: cleaned });
     }, 60_000);
 
+    startProactiveScheduler();
+
     const aiConfig = getAIConfig();
     const llmAvailable = await llmClient.isAvailable();
     if (llmAvailable) {
@@ -267,6 +270,29 @@ function startKeepWarmWatchdog(): void {
         Log.warn(`Model ${model} no longer loaded, reloading into memory`, { model });
         const ms = await llmClient.warmup(model);
         if (ms > 0) Log.info("Chat model re-warmed", { model, loadMs: ms });
+    }, CHECK_INTERVAL);
+}
+
+function startProactiveScheduler(): void {
+    const CHECK_INTERVAL = 20_000;
+    let running = false;
+
+    setInterval(async () => {
+        if (running) return;
+        const due = listDueTasks();
+        if (due.length === 0) return;
+
+        running = true;
+        try {
+            for (const task of due) {
+                Log.info("Running proactive task", { taskId: task.id, instructions: task.instructions });
+                await aiOrchestrator.runProactiveTask(task);
+            }
+        } catch (err: any) {
+            Log.error("Proactive scheduler iteration failed", err);
+        } finally {
+            running = false;
+        }
     }, CHECK_INTERVAL);
 }
 

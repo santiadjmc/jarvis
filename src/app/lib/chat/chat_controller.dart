@@ -96,6 +96,7 @@ class ChatMessage {
     this.status,
     this.errorMessage,
     this.tools = const [],
+    this.proactive = false,
   });
 
   final String id;
@@ -107,6 +108,7 @@ class ChatMessage {
   final ChatStatus? status;
   final String? errorMessage;
   final List<ToolStep> tools;
+  final bool proactive;
 
   ChatMessage copyWith({
     String? content,
@@ -116,6 +118,7 @@ class ChatMessage {
     ChatStatus? status,
     String? errorMessage,
     List<ToolStep>? tools,
+    bool? proactive,
     bool clearStatus = false,
   }) {
     return ChatMessage(
@@ -128,6 +131,7 @@ class ChatMessage {
       status: clearStatus ? null : (status ?? this.status),
       errorMessage: errorMessage ?? this.errorMessage,
       tools: tools ?? this.tools,
+      proactive: proactive ?? this.proactive,
     );
   }
 
@@ -151,6 +155,7 @@ class ChatMessage {
         if (status != null) 'status': status!.name,
         if (errorMessage != null) 'errorMessage': errorMessage,
         'tools': tools.map((t) => t.toJson()).toList(),
+        'proactive': proactive,
       };
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
@@ -167,6 +172,7 @@ class ChatMessage {
         tools: (json['tools'] as List<dynamic>? ?? [])
             .map((t) => ToolStep.fromJson(t as Map<String, dynamic>))
             .toList(),
+        proactive: json['proactive'] as bool? ?? false,
       );
 }
 
@@ -363,11 +369,11 @@ class ChatController extends Notifier<ChatState> {
 
   String? _messageForCall(String callId) => _callToMessage[callId];
 
-  ChatMessage _ensureBubble(String requestId) {
+  ChatMessage _ensureBubble(String requestId, {bool proactive = false}) {
     final existing = _bubble(requestId);
     if (existing != null) return existing;
-    _activeRequestId ??= requestId;
-    final bubble = ChatMessage(id: requestId, role: MessageRole.assistant);
+    if (!proactive) _activeRequestId ??= requestId;
+    final bubble = ChatMessage(id: requestId, role: MessageRole.assistant, proactive: proactive);
     _messages = [..._messages, bubble];
     state = state.copyWith(messages: _messages);
     return bubble;
@@ -506,7 +512,7 @@ class ChatController extends Notifier<ChatState> {
   }
 
   void _onToken(TokenMessage token) {
-    final bubble = _ensureBubble(token.requestId);
+    final bubble = _ensureBubble(token.requestId, proactive: token.proactive);
     final updated = token.kind == TokenKind.thinking
         ? bubble.copyWith(thinking: _appendStreamChunk(bubble.thinking, token.content))
         : bubble.copyWith(content: _appendStreamChunk(bubble.content, token.content));
@@ -520,8 +526,8 @@ class ChatController extends Notifier<ChatState> {
   }
 
   void _onStreamEnd(StreamEndMessage end) {
-    final bubble = _ensureBubble(end.requestId);
-    _activeRequestId = null;
+    final bubble = _ensureBubble(end.requestId, proactive: end.proactive);
+    if (_activeRequestId == end.requestId) _activeRequestId = null;
     final completed =
         _settleStrayTools(bubble.asCompleteWith(end.fullResponse, finalModel: end.model), ToolStepStatus.failed, 'No result received');
     _replace(completed);
@@ -547,7 +553,7 @@ class ChatController extends Notifier<ChatState> {
     final requestId = error.requestId;
     if (requestId != null) {
       final bubble = _ensureBubble(requestId);
-      _activeRequestId = null;
+      if (_activeRequestId == requestId) _activeRequestId = null;
       final settled = _settleStrayTools(
           bubble.copyWith(errorMessage: error.message, complete: true, clearStatus: true),
           ToolStepStatus.failed,

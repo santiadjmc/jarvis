@@ -15,6 +15,7 @@ import resultBroker from "../tools/ResultBroker";
 import ttsService, { extractSpeakableSentences } from "../voice/TtsService";
 import type { ToolResult } from "../tools/types";
 import { searchMemory } from "../agent/Memory/memoryStore";
+import { markRan, type ScheduledTask } from "../agent/Scheduler/taskStore";
 import Log from "../Log";
 
 const APPROVAL_TIMEOUT_MS = 60000;
@@ -33,7 +34,10 @@ class AIOrchestrator {
     private readonly DEFAULT_SYSTEM_PROMPT = `You are Jarvis, a highly capable AI assistant inspired by the AI from Iron Man.
 You are intelligent, precise, and proactive. You speak with confidence and clarity.
 You have access to tools to accomplish tasks. Never ask the user for permission or confirmation to use a tool: decide, call it, and report the result. Only ask when a decision genuinely requires user input such as a preference or choice.
+When the user asks to be reminded of something, checked on later, or wants something monitored over time, use schedule_task yourself instead of just promising to remember. Scheduled tasks run autonomously later and are delivered to every device the user is connected from, not just this one.
 Be concise unless detail is requested. Always aim to be maximally helpful.`;
+
+    private readonly PROACTIVE_SYSTEM_PROMPT = `You are Jarvis, running autonomously on a schedule you set up for yourself earlier, with no user watching right now. Use the tools available to complete the task, then write a short, natural message as if speaking directly to the user — it will be delivered immediately to every device they are connected from (phone, desktop, etc). Never mention that this is a "scheduled task" or "trigger" mechanically; just deliver it the way Jarvis naturally would.`;
 
     private voiceRequests = new Set<string>();
     private speechBuffer = new Map<string, string>();
@@ -608,6 +612,132 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             out.push(call);
         }
         return out;
+    }
+
+    async runProactiveTask(task: ScheduledTask): Promise<void> {
+        const streamId = uuid();
+        const model = modelManager.getActive();
+        const conversation = conversationManager.getOrCreate("proactive-scheduler", "proactive", this.PROACTIVE_SYSTEM_PROMPT, model);
+
+        conversationManager.addMessage(conversation.id, {
+            role: "user",
+            content: `[Scheduled trigger fired] ${task.instructions}`,
+            timestamp: Date.now(),
+            model,
+        });
+
+        const toolDefs = toolRegistry.defsForOllama({ safeOnly: true });
+        const turns = maxToolTurns();
+        let assistantContent = "";
+
+        try {
+            for (let turn = 0; turn < turns; turn++) {
+                const conv = conversationManager.get(conversation.id);
+                if (!conv) break;
+
+                const messages = promptBuilder.buildAgentMessages(conv.messages, toolDefs, conv.systemPrompt);
+                let turnContent = "";
+                let toolCalls: OllamaToolCall[] = [];
+                let sawToolCalls = false;
+
+                const tokenStream = llmClient.chatStream({ model, messages, stream: true, tools: toolDefs });
+
+                for await (const chunk of tokenStream) {
+                    if (chunk.content) {
+                        turnContent += chunk.content;
+                        assistantContent += chunk.content;
+                        const tokenMsg: TokenMessage = {
+                            type: "token",
+                            id: uuid(),
+                            content: chunk.content,
+                            requestId: streamId,
+                            kind: "assistant",
+                            proactive: true,
+                        };
+                        connectionManager.broadcast(JSON.stringify(tokenMsg));
+                    }
+                    if (Array.isArray(chunk.toolCalls) && chunk.toolCalls.length > 0) {
+                        sawToolCalls = true;
+                        toolCalls = chunk.toolCalls as OllamaToolCall[];
+                    }
+                }
+
+                if (sawToolCalls && toolCalls.length > 0) {
+                    toolCalls = this.dedupeToolCalls(toolCalls);
+                    conversationManager.addMessage(conversation.id, {
+                        role: "assistant",
+                        content: turnContent,
+                        timestamp: Date.now(),
+                        model,
+                        toolCalls,
+                    });
+                    await this.executeSafeToolCalls(conversation.id, toolCalls);
+                    continue;
+                }
+
+                conversationManager.addMessage(conversation.id, {
+                    role: "assistant",
+                    content: turnContent,
+                    timestamp: Date.now(),
+                    model,
+                });
+                break;
+            }
+
+            const endMsg: StreamEndMessage = {
+                type: "stream_end",
+                id: uuid(),
+                requestId: streamId,
+                fullResponse: assistantContent,
+                model,
+                proactive: true,
+            };
+            connectionManager.broadcast(JSON.stringify(endMsg));
+            Log.info("Proactive task delivered", { taskId: task.id, responseLength: assistantContent.length });
+        } catch (err: any) {
+            Log.error("Proactive task failed", err);
+        } finally {
+            markRan(task.id);
+            this.reWarmFastAfterDeep(model);
+        }
+    }
+
+    private async executeSafeToolCalls(conversationId: string, calls: OllamaToolCall[]): Promise<void> {
+        for (const call of calls) {
+            const name = call.function?.name;
+            const params = (call.function?.arguments as Record<string, unknown>) || {};
+            const callId = call.id || `call_${uuid()}`;
+
+            if (!name) {
+                conversationManager.addMessage(conversationId, {
+                    role: "tool",
+                    content: JSON.stringify({ success: false, error: "Malformed tool call: missing name" }),
+                    timestamp: Date.now(),
+                    tool_call_id: callId,
+                });
+                continue;
+            }
+
+            let result: ToolResult;
+            if (!toolRegistry.isSafeForAutonomousRun(name)) {
+                result = {
+                    success: false,
+                    data: null,
+                    error: `${name} requires live user approval and cannot run in an autonomous/proactive task.`,
+                    executionTimeMs: 0,
+                };
+            } else {
+                result = await toolRegistry.execute(name, params, { clientId: "proactive-scheduler", requestId: conversationId });
+            }
+
+            conversationManager.addMessage(conversationId, {
+                role: "tool",
+                content: toolRegistry.serializeForModel(name, result),
+                timestamp: Date.now(),
+                tool_name: name,
+                tool_call_id: callId,
+            });
+        }
     }
 
     private reWarmFastAfterDeep(model: string): void {

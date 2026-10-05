@@ -281,11 +281,25 @@ class _AssistantBubbleState extends ConsumerState<_AssistantBubble> {
       decoration: BoxDecoration(
         color: const Color(0xFF101830),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.white10),
+        border: Border.all(color: message.proactive ? const Color(0xFF00E5FF).withValues(alpha: 0.4) : Colors.white10),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (message.proactive) ...[
+            const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.bolt, size: 14, color: Color(0xFF00E5FF)),
+                SizedBox(width: 4),
+                Text(
+                  'Jarvis reached out',
+                  style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11.5, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+          ],
           if (message.status != null || streaming)
             _StatusChip(status: message.status, streaming: streaming),
           if (message.errorMessage != null) ...[

@@ -162,12 +162,14 @@ class TokenMessage extends ServerMessage {
     required this.content,
     required this.requestId,
     required this.kind,
+    this.proactive = false,
   });
 
   final String id;
   final String content;
   final String requestId;
   final TokenKind kind;
+  final bool proactive;
 
   factory TokenMessage.fromJson(Map<String, dynamic> json) {
     final kind = switch (json['kind'] as String?) {
@@ -179,6 +181,7 @@ class TokenMessage extends ServerMessage {
       content: json['content'] as String,
       requestId: json['requestId'] as String,
       kind: kind,
+      proactive: json['proactive'] as bool? ?? false,
     );
   }
 }
@@ -189,18 +192,21 @@ class StreamEndMessage extends ServerMessage {
     required this.requestId,
     required this.fullResponse,
     required this.model,
+    this.proactive = false,
   });
 
   final String id;
   final String requestId;
   final String fullResponse;
   final String model;
+  final bool proactive;
 
   factory StreamEndMessage.fromJson(Map<String, dynamic> json) => StreamEndMessage(
         id: json['id'] as String,
         requestId: json['requestId'] as String,
         fullResponse: json['fullResponse'] as String,
         model: json['model'] as String,
+        proactive: json['proactive'] as bool? ?? false,
       );
 }
 

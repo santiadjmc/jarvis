@@ -118,6 +118,7 @@ export interface TokenMessage {
     content: string;
     requestId: string;
     kind?: "assistant" | "thinking";
+    proactive?: boolean;
 }
 
 export interface StreamEndMessage {
@@ -127,6 +128,7 @@ export interface StreamEndMessage {
     fullResponse: string;
     usage?: TokenUsage;
     model: string;
+    proactive?: boolean;
 }
 
 export interface StatusMessage {
