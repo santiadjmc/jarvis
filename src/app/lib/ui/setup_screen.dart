@@ -92,7 +92,6 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 const SizedBox(height: 40),
                 TextField(
                   controller: _hostController,
-                  enabled: !busy,
                   decoration: const InputDecoration(
                     labelText: 'Server',
                     prefixIcon: Icon(Icons.dns_outlined),
@@ -103,7 +102,6 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 const SizedBox(height: 16),
                 TextField(
                   controller: _keyController,
-                  enabled: !busy,
                   obscureText: true,
                   decoration: const InputDecoration(
                     labelText: 'API key',
@@ -114,7 +112,6 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 const SizedBox(height: 16),
                 TextField(
                   controller: _nameController,
-                  enabled: !busy,
                   decoration: const InputDecoration(
                     labelText: 'Device name',
                     prefixIcon: Icon(Icons.smartphone),

@@ -84,6 +84,7 @@ class LLMClient {
     private embeddingModel: string;
     private timeout: number;
     private dispatcher: Agent;
+    private ollamaNative: boolean | null = null;
 
     constructor() {
         const cfg = getAIConfig();
@@ -252,6 +253,18 @@ class LLMClient {
                 return false;
             }
         }
+    }
+
+    async isOllamaNative(): Promise<boolean> {
+        if (this.ollamaNative !== null) return this.ollamaNative;
+        try {
+            const response = await this.nativeRequest("/api/tags", undefined, "GET");
+            const data = await response.json() as any;
+            this.ollamaNative = Array.isArray(data?.models);
+        } catch {
+            this.ollamaNative = false;
+        }
+        return this.ollamaNative;
     }
 
     getDefaultModel(): string {

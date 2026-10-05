@@ -614,7 +614,9 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         if (model !== modelManager.getDeep()) return;
         const fast = modelManager.getActive();
         setTimeout(() => {
-            llmClient.warmup(fast).catch(() => {});
+            llmClient.isOllamaNative().then(isOllama => {
+                if (isOllama) llmClient.warmup(fast).catch(() => {});
+            });
         }, 250);
     }
 

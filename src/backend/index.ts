@@ -161,14 +161,22 @@ async function boot(): Promise<void> {
     const llmAvailable = await llmClient.isAvailable();
     if (llmAvailable) {
         Log.info("LLM endpoint connection verified", { baseUrl: aiConfig.baseUrl });
-        await modelManager.syncWithOllama();
+        const isOllama = await llmClient.isOllamaNative();
 
-        const activeModel = modelManager.getActive();
-        Log.info(`Loading ${activeModel} into memory...`, { model: activeModel });
-        const chatWarmupMs = await llmClient.warmup(activeModel);
-        if (chatWarmupMs > 0) Log.info("Chat model warm", { model: activeModel, loadMs: chatWarmupMs });
+        if (isOllama) {
+            await modelManager.syncWithOllama();
 
-        startKeepWarmWatchdog();
+            const activeModel = modelManager.getActive();
+            Log.info(`Loading ${activeModel} into memory...`, { model: activeModel });
+            const chatWarmupMs = await llmClient.warmup(activeModel);
+            if (chatWarmupMs > 0) Log.info("Chat model warm", { model: activeModel, loadMs: chatWarmupMs });
+
+            startKeepWarmWatchdog();
+        } else {
+            Log.info("Non-Ollama OpenAI-compatible endpoint detected; skipping model warm-up and keep-alive management", {
+                baseUrl: aiConfig.baseUrl,
+            });
+        }
     } else {
         Log.warn("LLM endpoint not reachable - AI features will not work until it is started", {
             baseUrl: aiConfig.baseUrl,
