@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+.pm.pid
+.pm.status.json
 
 ## Node.js / TypeScript
 node_modules/
