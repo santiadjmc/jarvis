@@ -7,7 +7,7 @@ export interface ToolDefinition {
     sandboxed: boolean;
 }
 
-export type ToolCategory = "system" | "web" | "file" | "code" | "memory" | "utility" | "schedule";
+export type ToolCategory = "system" | "web" | "file" | "code" | "memory" | "utility" | "schedule" | "communication";
 
 export type Permission = "tools:execute";
 

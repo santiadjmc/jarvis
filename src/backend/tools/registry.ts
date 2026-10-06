@@ -10,6 +10,10 @@ import webTools from "./implementations/web";
 import memoryTools from "./implementations/memory";
 import scheduleTools from "./implementations/schedule";
 import codeTools from "./implementations/code";
+import emailTools from "./implementations/email";
+import networkTools from "./implementations/network";
+import utilityTools from "./implementations/utility";
+import gitTools from "./implementations/git";
 import deviceTools from "./deviceTools";
 import type { ToolResult, ToolResultMessagePayload, ToolSpec } from "./types";
 
@@ -22,7 +26,7 @@ class ToolRegistry {
     private init(): void {
         if (this.initialized) return;
         this.initialized = true;
-        for (const spec of [...systemTools, ...fileTools, ...shellTools, ...webTools, ...memoryTools, ...scheduleTools, ...codeTools, ...deviceTools]) {
+        for (const spec of [...systemTools, ...fileTools, ...shellTools, ...webTools, ...memoryTools, ...scheduleTools, ...codeTools, ...emailTools, ...networkTools, ...utilityTools, ...gitTools, ...deviceTools]) {
             this.specs.set(spec.name, spec);
         }
         Log.info("Tool registry initialized", { tools: this.specs.size });
@@ -82,7 +86,7 @@ class ToolRegistry {
 
     categories(): Record<ToolCategory, string[]> {
         this.init();
-        const out = { system: [], web: [], file: [], code: [], memory: [], utility: [], schedule: [] } as Record<ToolCategory, string[]>;
+        const out = { system: [], web: [], file: [], code: [], memory: [], utility: [], schedule: [], communication: [] } as Record<ToolCategory, string[]>;
         for (const name of this.list()) {
             const spec = this.get(name);
             if (spec) out[spec.category].push(name);

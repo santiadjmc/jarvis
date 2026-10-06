@@ -223,5 +223,45 @@ const getWeather: ToolSpec = {
     },
 };
 
-const webTools: ToolSpec[] = [webSearch, fetchUrl, httpRequest, getWeather];
+const convertCurrency: ToolSpec = {
+    name: "convert_currency",
+    description: "Convert an amount from one currency to another using current exchange rates.",
+    category: "web",
+    requiresApproval: false,
+    timeoutMs: 15000,
+    parameters: {
+        type: "object",
+        properties: {
+            amount: { type: "number", description: "Amount to convert" },
+            from: { type: "string", description: "Source currency code, e.g. USD" },
+            to: { type: "string", description: "Target currency code, e.g. EUR" },
+        },
+        required: ["amount", "from", "to"],
+    },
+    async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+        const amount = Number(params.amount);
+        const from = typeof params.from === "string" ? params.from.trim().toUpperCase() : "";
+        const to = typeof params.to === "string" ? params.to.trim().toUpperCase() : "";
+        if (!Number.isFinite(amount)) return { success: false, data: null, error: "amount must be a number" };
+        if (!/^[A-Z]{3}$/.test(from) || !/^[A-Z]{3}$/.test(to)) return { success: false, data: null, error: "from and to must be 3-letter currency codes" };
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10000);
+        try {
+            const response = await fetch(`https://open.er-api.com/v6/latest/${from}`, { signal: controller.signal });
+            if (!response.ok) return { success: false, data: null, error: `HTTP ${response.status}` };
+            const json = await response.json() as { result: string; rates?: Record<string, number> };
+            if (json.result !== "success" || !json.rates) return { success: false, data: null, error: "Exchange rate lookup failed" };
+            const rate = json.rates[to];
+            if (rate === undefined) return { success: false, data: null, error: `Unknown currency code: ${to}` };
+            return { success: true, data: { amount, from, to, rate, result: Math.round(amount * rate * 10000) / 10000 } };
+        } catch (err: any) {
+            return { success: false, data: null, error: err.name === "AbortError" ? "Request timed out" : err.message };
+        } finally {
+            clearTimeout(timer);
+        }
+    },
+};
+
+const webTools: ToolSpec[] = [webSearch, fetchUrl, httpRequest, getWeather, convertCurrency];
 export default webTools;

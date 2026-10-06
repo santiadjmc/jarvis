@@ -1,4 +1,4 @@
-import { addMemory, searchMemory, memoryCount } from "../../agent/Memory/memoryStore";
+import { addMemory, searchMemory, memoryCount, listMemories, deleteMemory } from "../../agent/Memory/memoryStore";
 import type { ToolContext, ToolResult, ToolSpec } from "../types";
 
 const remember: ToolSpec = {
@@ -53,5 +53,46 @@ const recall: ToolSpec = {
     },
 };
 
-const memoryTools: ToolSpec[] = [remember, recall];
+const listMemoriesTool: ToolSpec = {
+    name: "list_memories",
+    description: "List everything currently stored in long-term memory, most recent first.",
+    category: "memory",
+    requiresApproval: false,
+    timeoutMs: 10000,
+    parameters: {
+        type: "object",
+        properties: {
+            limit: { type: "number", description: "Max entries to return (default 50)", default: 50 },
+        },
+    },
+    async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+        const limit = Math.max(1, Math.min(200, Number(params.limit ?? 50)));
+        return { success: true, data: listMemories(limit) };
+    },
+};
+
+const forget: ToolSpec = {
+    name: "forget",
+    description: "Delete a fact or note from long-term memory by id (see list_memories for ids). Requires user approval.",
+    category: "memory",
+    requiresApproval: true,
+    timeoutMs: 10000,
+    parameters: {
+        type: "object",
+        properties: {
+            id: { type: "string", description: "Memory entry id from list_memories" },
+        },
+        required: ["id"],
+    },
+    async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+        const id = typeof params.id === "string" ? params.id : "";
+        if (!id) return { success: false, data: null, error: "id is required" };
+        const removed = deleteMemory(id);
+        return removed
+            ? { success: true, data: { id, forgotten: true } }
+            : { success: false, data: null, error: `No memory entry with id ${id}` };
+    },
+};
+
+const memoryTools: ToolSpec[] = [remember, recall, listMemoriesTool, forget];
 export default memoryTools;

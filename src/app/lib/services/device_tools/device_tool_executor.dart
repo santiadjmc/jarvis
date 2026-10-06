@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_config.dart';
@@ -92,6 +93,9 @@ List<String> capabilitiesFor(String deviceType) {
   if (deviceType == 'android' || deviceType == 'ios' || deviceType == 'linux' || deviceType == 'windows' || deviceType == 'macos') {
     caps.add('device:get_battery');
   }
+  if (deviceType == 'android' || deviceType == 'ios' || deviceType == 'linux' || deviceType == 'windows' || deviceType == 'macos') {
+    caps.add('device:get_location');
+  }
   return caps;
 }
 
@@ -150,6 +154,7 @@ class DeviceToolExecutor {
         'device_vibrate' => _vibrate(),
         'device_show_notification' => _showNotification(params),
         'device_get_battery' => _getBattery(),
+        'device_get_location' => _getLocation(),
         'device_run_command' => _runCommand(params),
         _ => Future.value(DeviceToolResult.failure('Unknown device tool: $tool')),
       };
@@ -248,6 +253,32 @@ class DeviceToolExecutor {
         'level': level,
         'state': state.name,
         'charging': state == BatteryState.charging || state == BatteryState.full,
+      });
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _getLocation() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        return DeviceToolResult.failure('Location services are disabled on this device');
+      }
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+        return DeviceToolResult.failure('Location permission denied');
+      }
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.medium, timeLimit: Duration(seconds: 15)),
+      );
+      return DeviceToolResult(success: true, data: {
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+        'accuracyMeters': position.accuracy,
+        'timestamp': position.timestamp.toIso8601String(),
       });
     } catch (e) {
       return DeviceToolResult.failure('$e');

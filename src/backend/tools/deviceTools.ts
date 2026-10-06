@@ -168,6 +168,25 @@ const deviceGetBattery: ToolSpec = {
     },
 };
 
+const deviceGetLocation: ToolSpec = {
+    name: "device_get_location",
+    description: "Get a client device's current GPS location (latitude, longitude, accuracy). Requires user approval since it is privacy-sensitive.",
+    category: "system",
+    requiresApproval: true,
+    timeoutMs: 20000,
+    runtime: "device",
+    capability: "device:get_location",
+    parameters: {
+        type: "object",
+        properties: {
+            device: deviceParam,
+        },
+    },
+    async execute() {
+        return unsupported("device_get_location");
+    },
+};
+
 const deviceRunCommand: ToolSpec = {
     name: "device_run_command",
     description: "Run a shell command on a client device (Android and desktop only; the phone app's own sandbox, not root).",
@@ -199,6 +218,7 @@ export const deviceToolCapabilities = [
     "device:run_command",
     "device:show_notification",
     "device:get_battery",
+    "device:get_location",
 ];
 
 const deviceTools: ToolSpec[] = [
@@ -210,6 +230,7 @@ const deviceTools: ToolSpec[] = [
     deviceVibrate,
     deviceShowNotification,
     deviceGetBattery,
+    deviceGetLocation,
     deviceRunCommand,
 ];
 

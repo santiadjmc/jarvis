@@ -96,3 +96,21 @@ export async function searchMemory(query: string, k = 5, minScore = 0.35): Promi
 export function memoryCount(): number {
     return load().entries.length;
 }
+
+export function listMemories(limit = 50): Array<{ id: string; content: string; type: string; createdAt: number }> {
+    const data = load();
+    return data.entries
+        .slice()
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .slice(0, limit)
+        .map(e => ({ id: e.id, content: e.content, type: e.type, createdAt: e.createdAt }));
+}
+
+export function deleteMemory(id: string): boolean {
+    const data = load();
+    const before = data.entries.length;
+    data.entries = data.entries.filter(e => e.id !== id);
+    if (data.entries.length === before) return false;
+    save(data);
+    return true;
+}
