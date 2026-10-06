@@ -1,12 +1,29 @@
 import 'dart:io' show Platform, Process;
 
+import 'package:battery_plus/battery_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_config.dart';
+
+final _localNotifications = FlutterLocalNotificationsPlugin();
+bool _notificationsInitialized = false;
+int _notificationId = 0;
+
+Future<void> _ensureNotificationsInitialized() async {
+  if (_notificationsInitialized) return;
+  _notificationsInitialized = true;
+  await _localNotifications.initialize(
+    settings: const InitializationSettings(
+      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      linux: LinuxInitializationSettings(defaultActionName: 'Open Jarvis'),
+    ),
+  );
+}
 
 class DeviceToolResult {
   const DeviceToolResult({required this.success, this.data, this.error, this.executionTimeMs});
@@ -58,12 +75,22 @@ class DeviceMeta {
 }
 
 List<String> capabilitiesFor(String deviceType) {
-  final caps = <String>['device:time', 'device:info', 'device:open_url', 'device:set_clipboard', 'device:get_clipboard'];
+  final caps = <String>[
+    'device:time',
+    'device:info',
+    'device:open_url',
+    'device:set_clipboard',
+    'device:get_clipboard',
+    'device:show_notification',
+  ];
   if (deviceType == 'android' || deviceType == 'ios') {
     caps.add('device:vibrate');
   }
   if (deviceType != 'ios' && deviceType != 'web') {
     caps.add('device:run_command');
+  }
+  if (deviceType == 'android' || deviceType == 'ios' || deviceType == 'linux' || deviceType == 'windows' || deviceType == 'macos') {
+    caps.add('device:get_battery');
   }
   return caps;
 }
@@ -121,6 +148,8 @@ class DeviceToolExecutor {
         'device_set_clipboard' => _setClipboard(params),
         'device_open_url' => _openUrl(params),
         'device_vibrate' => _vibrate(),
+        'device_show_notification' => _showNotification(params),
+        'device_get_battery' => _getBattery(),
         'device_run_command' => _runCommand(params),
         _ => Future.value(DeviceToolResult.failure('Unknown device tool: $tool')),
       };
@@ -181,6 +210,48 @@ class DeviceToolExecutor {
   Future<DeviceToolResult> _vibrate() async {
     await HapticFeedback.mediumImpact();
     return const DeviceToolResult(success: true);
+  }
+
+  Future<DeviceToolResult> _showNotification(Map<String, dynamic> params) async {
+    final title = (params['title'] as String?) ?? '';
+    final body = (params['body'] as String?) ?? '';
+    if (title.isEmpty && body.isEmpty) return DeviceToolResult.failure('title or body is required');
+    try {
+      await _ensureNotificationsInitialized();
+      await _localNotifications.show(
+        id: _notificationId++,
+        title: title,
+        body: body,
+        notificationDetails: const NotificationDetails(
+          android: AndroidNotificationDetails(
+            'jarvis_alerts',
+            'Jarvis alerts',
+            channelDescription: 'Notifications Jarvis sends you proactively',
+            importance: Importance.high,
+            priority: Priority.high,
+          ),
+          linux: LinuxNotificationDetails(),
+        ),
+      );
+      return const DeviceToolResult(success: true);
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _getBattery() async {
+    try {
+      final battery = Battery();
+      final level = await battery.batteryLevel;
+      final state = await battery.batteryState;
+      return DeviceToolResult(success: true, data: {
+        'level': level,
+        'state': state.name,
+        'charging': state == BatteryState.charging || state == BatteryState.full,
+      });
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
   }
 
   Future<DeviceToolResult> _runCommand(Map<String, dynamic> params) async {

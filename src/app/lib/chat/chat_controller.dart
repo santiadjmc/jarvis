@@ -183,6 +183,7 @@ class ChatState {
     this.online = false,
     this.pendingError,
     this.continuousVoice = false,
+    this.autoApprove = false,
   });
 
   final List<ChatMessage> messages;
@@ -190,6 +191,7 @@ class ChatState {
   final bool online;
   final String? pendingError;
   final bool continuousVoice;
+  final bool autoApprove;
 
   ChatState copyWith({
     List<ChatMessage>? messages,
@@ -197,6 +199,7 @@ class ChatState {
     bool? online,
     String? pendingError,
     bool? continuousVoice,
+    bool? autoApprove,
     bool clearError = false,
   }) {
     return ChatState(
@@ -205,6 +208,7 @@ class ChatState {
       online: online ?? this.online,
       pendingError: clearError ? null : (pendingError ?? this.pendingError),
       continuousVoice: continuousVoice ?? this.continuousVoice,
+      autoApprove: autoApprove ?? this.autoApprove,
     );
   }
 }
@@ -297,6 +301,9 @@ class ChatController extends Notifier<ChatState> {
     ref.listen(connectionControllerProvider, (prev, next) {
       if (prev?.status != next.status) {
         state = state.copyWith(online: next.status == ConnectionStatus.connected);
+        if (next.status == ConnectionStatus.connected) {
+          ref.read(connectionControllerProvider.notifier).sendConfigGet('autoApprove');
+        }
       }
     });
     final messages = ref.read(connectionControllerProvider.notifier).messages;
@@ -355,9 +362,21 @@ class ChatController extends Notifier<ChatState> {
         _onError(error);
       case VoiceResponseMessage voice:
         _onVoice(voice);
-      case PongMessage() || ConfigResponseMessage() || ConnectedMessage():
+      case ConfigResponseMessage config:
+        _onConfigResponse(config);
+      case PongMessage() || ConnectedMessage():
         break;
     }
+  }
+
+  void _onConfigResponse(ConfigResponseMessage msg) {
+    if (msg.key == 'autoApprove' && msg.value is bool) {
+      state = state.copyWith(autoApprove: msg.value as bool);
+    }
+  }
+
+  void setAutoApprove(bool value) {
+    ref.read(connectionControllerProvider.notifier).sendConfigSet('autoApprove', value);
   }
 
   ChatMessage? _bubble(String id) {

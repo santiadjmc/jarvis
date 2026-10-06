@@ -127,6 +127,47 @@ const deviceVibrate: ToolSpec = {
     },
 };
 
+const deviceShowNotification: ToolSpec = {
+    name: "device_show_notification",
+    description: "Show a local notification on a client device, visible even while the app is backgrounded. Use this to get the user's attention for something important or time-sensitive.",
+    category: "utility",
+    requiresApproval: false,
+    timeoutMs: 20000,
+    runtime: "device",
+    capability: "device:show_notification",
+    parameters: {
+        type: "object",
+        properties: {
+            device: deviceParam,
+            title: { type: "string", description: "Notification title" },
+            body: { type: "string", description: "Notification body text" },
+        },
+        required: ["title", "body"],
+    },
+    async execute() {
+        return unsupported("device_show_notification");
+    },
+};
+
+const deviceGetBattery: ToolSpec = {
+    name: "device_get_battery",
+    description: "Get a client device's battery level and charging state.",
+    category: "system",
+    requiresApproval: false,
+    timeoutMs: 20000,
+    runtime: "device",
+    capability: "device:get_battery",
+    parameters: {
+        type: "object",
+        properties: {
+            device: deviceParam,
+        },
+    },
+    async execute() {
+        return unsupported("device_get_battery");
+    },
+};
+
 const deviceRunCommand: ToolSpec = {
     name: "device_run_command",
     description: "Run a shell command on a client device (Android and desktop only; the phone app's own sandbox, not root).",
@@ -156,6 +197,8 @@ export const deviceToolCapabilities = [
     "device:open_url",
     "device:vibrate",
     "device:run_command",
+    "device:show_notification",
+    "device:get_battery",
 ];
 
 const deviceTools: ToolSpec[] = [
@@ -165,6 +208,8 @@ const deviceTools: ToolSpec[] = [
     deviceSetClipboard,
     deviceOpenUrl,
     deviceVibrate,
+    deviceShowNotification,
+    deviceGetBattery,
     deviceRunCommand,
 ];
 

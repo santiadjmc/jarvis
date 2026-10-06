@@ -16,6 +16,7 @@ import ttsService, { extractSpeakableSentences } from "../voice/TtsService";
 import type { ToolResult } from "../tools/types";
 import { searchMemory } from "../agent/Memory/memoryStore";
 import { markRan, type ScheduledTask } from "../agent/Scheduler/taskStore";
+import { isAutoApproveEnabled } from "../agent/runtimeConfig";
 import Log from "../Log";
 
 const APPROVAL_TIMEOUT_MS = 60000;
@@ -24,10 +25,6 @@ const DEVICE_TOOL_TIMEOUT_MS = 90000;
 function maxToolTurns(): number {
     const parsed = parseInt(process.env.JARVIS_MAX_TOOL_TURNS || "6", 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
-}
-
-function autoApprove(): boolean {
-    return ["1", "true", "yes"].includes((process.env.JARVIS_AUTO_APPROVE || "").toLowerCase());
 }
 
 class AIOrchestrator {
@@ -95,7 +92,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         const streamId = existingStreamId ?? streamManager.create(client.id, conversationId, model, abortController);
         const turns = maxToolTurns();
         const toolDefs = toolRegistry.defsForOllama();
-        const approvalsAuto = autoApprove();
+        const approvalsAuto = isAutoApproveEnabled();
         const voiceRequested = this.voiceRequests.has(streamId);
 
         this.sendStatus(client.id, tier === "deep" ? "reasoning" : "generating", streamId);
@@ -264,7 +261,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             const approvalRequired = spec?.requiresApproval ?? toolRegistry.requiresApproval(name);
 
             if (spec?.runtime === "device") {
-                await this.executeDeviceTool(client, conversationId, requestId, callId, name, params, signal);
+                await this.executeDeviceTool(client, conversationId, requestId, callId, name, params, signal, approvalsAuto);
                 continue;
             }
 
@@ -327,6 +324,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         name: string,
         params: Record<string, unknown>,
         signal: AbortSignal,
+        approvalsAuto: boolean,
     ): Promise<void> {
         const requesterDeviceId = (client.metadata?.deviceId as string | undefined) || undefined;
         const targetParam = typeof params.device === "string" && params.device.trim() ? params.device.trim() : undefined;
@@ -369,7 +367,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             tool: name,
             callId,
             params: sendableParams,
-            approvalRequired: spec?.requiresApproval ?? true,
+            approvalRequired: approvalsAuto ? false : (spec?.requiresApproval ?? true),
             executor: "device",
         };
         if (!connectionManager.send(targetConnection, JSON.stringify(callMsg))) {

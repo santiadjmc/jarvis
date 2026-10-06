@@ -99,6 +99,65 @@ function stripMarkup(text: string, contentType: string): string {
         .trim();
 }
 
+const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]);
+
+const httpRequest: ToolSpec = {
+    name: "http_request",
+    description: "Make a general HTTP request to any API or URL (GET, POST, PUT, PATCH, DELETE, HEAD), with custom headers and body. More flexible than fetch_url or web_search for calling specific APIs (e.g. a local home automation server, a webhook, a REST API). Requires user approval since it can have side effects.",
+    category: "web",
+    requiresApproval: true,
+    timeoutMs: 20000,
+    parameters: {
+        type: "object",
+        properties: {
+            url: { type: "string", description: "Absolute http(s) URL" },
+            method: { type: "string", description: "HTTP method (default GET)", enum: ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"], default: "GET" },
+            headers: { type: "object", description: "Request headers as a flat object of string key/value pairs" },
+            body: { type: "string", description: "Raw request body, e.g. a JSON string. Only used for POST/PUT/PATCH." },
+        },
+        required: ["url"],
+    },
+    async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+        const url = typeof params.url === "string" ? params.url : "";
+        if (!/^https?:\/\//i.test(url)) return { success: false, data: null, error: "Only http(s) URLs are supported" };
+
+        const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
+        if (!HTTP_METHODS.has(method)) return { success: false, data: null, error: `Unsupported method: ${method}` };
+
+        const headers: Record<string, string> = { "User-Agent": "Jarvis/1.0 (local assistant)" };
+        if (params.headers && typeof params.headers === "object") {
+            for (const [key, value] of Object.entries(params.headers as Record<string, unknown>)) {
+                headers[key] = String(value);
+            }
+        }
+
+        const body = typeof params.body === "string" && ["POST", "PUT", "PATCH"].includes(method) ? params.body : undefined;
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        try {
+            const response = await fetch(url, { method, headers, body, signal: controller.signal, redirect: "follow" });
+            const text = await response.text();
+            const truncated = text.length > MAX_FETCH_BYTES;
+            return {
+                success: response.ok,
+                data: {
+                    status: response.status,
+                    statusText: response.statusText,
+                    contentType: response.headers.get("content-type") || "",
+                    truncated,
+                    body: truncated ? text.slice(0, MAX_FETCH_BYTES) + "\n...[truncated]" : text,
+                },
+                error: response.ok ? undefined : `HTTP ${response.status} ${response.statusText}`,
+            };
+        } catch (err: any) {
+            return { success: false, data: null, error: err.name === "AbortError" ? "Request timed out" : err.message };
+        } finally {
+            clearTimeout(timer);
+        }
+    },
+};
+
 const getWeather: ToolSpec = {
     name: "get_weather",
     description: "Current weather conditions for a city or location: temperature, feels-like, humidity, wind, and text description. Uses the free wttr.in service.",
@@ -164,5 +223,5 @@ const getWeather: ToolSpec = {
     },
 };
 
-const webTools: ToolSpec[] = [webSearch, fetchUrl, getWeather];
+const webTools: ToolSpec[] = [webSearch, fetchUrl, httpRequest, getWeather];
 export default webTools;

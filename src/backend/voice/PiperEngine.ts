@@ -49,6 +49,7 @@ export class PiperEngine {
     isUsable(): boolean {
         try {
             accessSync(this.modelPath);
+            accessSync(`${this.modelPath}.json`);
             return true;
         } catch {
             return false;
@@ -95,7 +96,7 @@ export class PiperEngine {
     }
 }
 
-function readSampleRate(buf: Buffer): number {
+export function readSampleRate(buf: Buffer): number {
     if (buf.length < 28 || buf.toString("ascii", 0, 4) !== "RIFF") return 22050;
     return buf.readUInt32LE(24) || 22050;
 }

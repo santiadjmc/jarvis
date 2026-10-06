@@ -15,6 +15,7 @@ import { getAIConfig } from "./ai/config";
 import cacheManager from "./managers/CacheManager";
 import ttsService from "./voice/TtsService";
 import { listDueTasks } from "./agent/Scheduler/taskStore";
+import { isAutoApproveEnabled, setAutoApprove } from "./agent/runtimeConfig";
 import { getLocalAddresses } from "./utils/network";
 import Log from "./Log";
 
@@ -225,6 +226,9 @@ function handleConfigMessage(client: { id: string }, message: { id: string; acti
             case "sessions":
                 value = conversationManager.getStats();
                 break;
+            case "autoApprove":
+                value = isAutoApproveEnabled();
+                break;
             default:
                 connectionManager.send(client.id, JSON.stringify({
                     type: "error",
@@ -244,6 +248,15 @@ function handleConfigMessage(client: { id: string }, message: { id: string; acti
         if (message.key === "model" && typeof message.value === "string") {
             modelManager.set(message.value);
             connectionManager.send(client.id, JSON.stringify({
+                type: "config_response",
+                id: message.id,
+                key: message.key,
+                value: message.value,
+            }));
+        } else if (message.key === "autoApprove" && typeof message.value === "boolean") {
+            setAutoApprove(message.value);
+            Log.info("Autonomous mode changed", { autoApprove: message.value, byClient: client.id });
+            connectionManager.broadcast(JSON.stringify({
                 type: "config_response",
                 id: message.id,
                 key: message.key,

@@ -4,7 +4,7 @@ import { homedir } from "os";
 import { join } from "path";
 import Log from "../Log";
 import type { SynthesizedAudio } from "./PiperEngine";
-import { PiperEngine } from "./PiperEngine";
+import { PiperEngine, readSampleRate } from "./PiperEngine";
 
 const MAX_TEXT_CHARS = 1500;
 const MAX_CHUNK_CHARS = 500;
@@ -32,10 +32,14 @@ class TtsService {
         }
         const engine = new PiperEngine();
         const binaryOk = await engine.checkBinary();
-        if (!engine.isUsable() || !binaryOk) {
-            Log.warn("TTS disabled: piper binary or voice model not found", {
-                binary: engine.binary,
+        if (!binaryOk) {
+            Log.warn("TTS disabled: piper binary not found or not executable", { binary: engine.binary });
+            return;
+        }
+        if (!engine.isUsable()) {
+            Log.warn("TTS disabled: voice model files not found (need both <voice>.onnx and <voice>.onnx.json)", {
                 model: engine.modelPath,
+                configExpectedAt: `${engine.modelPath}.json`,
             });
             return;
         }
@@ -51,16 +55,21 @@ class TtsService {
         return this.enabled && this.piper !== null;
     }
 
+    private cacheFile(text: string): string {
+        const voiceFingerprint = `${this.piper?.modelPath ?? "unknown"}:${process.env.TTS_SPEED || "1.0"}`;
+        return join(this.cacheDir, `${sha256(`${voiceFingerprint}::${text}`)}.wav`);
+    }
+
     async synthesize(text: string, { cache = true }: { cache?: boolean } = {}): Promise<SynthesizedAudio | null> {
         if (!this.ready || !this.piper) return null;
         const cleaned = cleanForSpeech(text);
         if (!cleaned) return null;
 
         if (cache) {
-            const file = join(this.cacheDir, `${sha256(cleaned)}.wav`);
+            const file = this.cacheFile(cleaned);
             try {
                 const audio = await readFile(file);
-                return { audio, format: "wav", sampleRate: 22050, durationMs: 0 };
+                return { audio, format: "wav", sampleRate: readSampleRate(audio), durationMs: wavDurationMs(audio) };
             } catch {}
         }
 
@@ -69,10 +78,11 @@ class TtsService {
         let sampleRate = 22050;
         for (const chunk of chunks) {
             let audio: Buffer;
-            const file = join(this.cacheDir, `${sha256(chunk)}.wav`);
+            const file = this.cacheFile(chunk);
             if (cache) {
                 try {
                     audio = await readFile(file);
+                    sampleRate = readSampleRate(audio);
                 } catch {
                     const synth = await this.piper.synthesize(chunk);
                     audio = synth.audio;
@@ -96,7 +106,7 @@ class TtsService {
         }
 
         if (cache) {
-            await this.writeCache(join(this.cacheDir, `${sha256(cleaned)}.wav`), audio);
+            await this.writeCache(this.cacheFile(cleaned), audio);
         }
         return { audio, format: "wav", sampleRate, durationMs: wavDurationMs(audio) };
     }

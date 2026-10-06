@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:path/path.dart' as p;
@@ -65,7 +65,8 @@ class TtsController extends Notifier<TtsState> {
       await player.playerStateStream.firstWhere(
         (s) => s.processingState == ProcessingState.completed || race != _generation,
       );
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Jarvis: TTS playback failed: $e');
     } finally {
       if (file != null) unawaited(file.delete().catchError((_) => file!));
       if (ref.mounted && race == _generation) state = const TtsState();

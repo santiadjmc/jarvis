@@ -35,7 +35,8 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
     final connection = ref.read(connectionControllerProvider.notifier);
     if (ref.read(connectionControllerProvider).status == ConnectionStatus.connected) {
       _configSub = connection.messages.listen((msg) {
-        if (msg is! ConfigResponseMessage || msg.key != 'models') return;
+        if (msg is! ConfigResponseMessage) return;
+        if (msg.key != 'models') return;
         final value = msg.value;
         if (value is! List) return;
         final names = value
@@ -94,9 +95,38 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
     if (mounted) Navigator.of(context).pop();
   }
 
+  Future<void> _setAutoApprove(bool value) async {
+    if (value) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: const Color(0xFF101830),
+          title: const Text('Enable full autonomous mode?'),
+          content: const Text(
+            'Jarvis will run every tool it decides to use — including shell commands, '
+            'file writes/deletes, and device actions — without asking you first. '
+            'Only enable this if you trust it completely.',
+            style: TextStyle(fontSize: 13),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
+            FilledButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+              child: const Text('Enable'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    ref.read(chatControllerProvider.notifier).setAutoApprove(value);
+  }
+
   @override
   Widget build(BuildContext context) {
     final connection = ref.watch(connectionControllerProvider);
+    final autoApprove = ref.watch(chatControllerProvider.select((s) => s.autoApprove));
 
     return Padding(
       padding: EdgeInsets.only(
@@ -184,6 +214,20 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
             ),
             value: ref.watch(settingsControllerProvider).voiceReplies,
             onChanged: (value) => ref.read(settingsControllerProvider.notifier).save(voiceReplies: value),
+          ),
+          const SizedBox(height: 4),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Full autonomous mode', style: TextStyle(fontSize: 14)),
+            subtitle: Text(
+              autoApprove
+                  ? 'Jarvis runs every tool automatically — nothing needs approval'
+                  : 'Jarvis asks before risky actions (shell, file writes, device control)',
+              style: TextStyle(fontSize: 12, color: autoApprove ? Colors.redAccent : Colors.white54),
+            ),
+            activeThumbColor: Colors.redAccent,
+            value: autoApprove,
+            onChanged: connection.status == ConnectionStatus.connected ? _setAutoApprove : null,
           ),
           const SizedBox(height: 20),
           FilledButton.icon(

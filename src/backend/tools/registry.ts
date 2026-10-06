@@ -9,6 +9,7 @@ import shellTools from "./implementations/shell";
 import webTools from "./implementations/web";
 import memoryTools from "./implementations/memory";
 import scheduleTools from "./implementations/schedule";
+import codeTools from "./implementations/code";
 import deviceTools from "./deviceTools";
 import type { ToolResult, ToolResultMessagePayload, ToolSpec } from "./types";
 
@@ -21,7 +22,7 @@ class ToolRegistry {
     private init(): void {
         if (this.initialized) return;
         this.initialized = true;
-        for (const spec of [...systemTools, ...fileTools, ...shellTools, ...webTools, ...memoryTools, ...scheduleTools, ...deviceTools]) {
+        for (const spec of [...systemTools, ...fileTools, ...shellTools, ...webTools, ...memoryTools, ...scheduleTools, ...codeTools, ...deviceTools]) {
             this.specs.set(spec.name, spec);
         }
         Log.info("Tool registry initialized", { tools: this.specs.size });

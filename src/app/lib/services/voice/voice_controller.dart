@@ -1,10 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:whisper_ggml/whisper_ggml.dart';
@@ -42,10 +41,10 @@ class VoiceController extends Notifier<VoiceState> {
   SpeechToText? _stt;
   AudioRecorder? _recorder;
   WhisperController? _whisper;
-  String? _recPath;
+  WhisperLiveSession? _liveSession;
   bool _nativeInitialized = false;
   void Function(String text)? _onFinal;
-  StreamSubscription<Amplitude>? _amplitudeSub;
+  StreamSubscription<Uint8List>? _audioStreamSub;
   Timer? _silenceTimer;
   Timer? _maxDurationTimer;
 
@@ -54,9 +53,10 @@ class VoiceController extends Notifier<VoiceState> {
     ref.onDispose(() {
       _silenceTimer?.cancel();
       _maxDurationTimer?.cancel();
-      unawaited(_amplitudeSub?.cancel());
+      unawaited(_audioStreamSub?.cancel());
       unawaited(_recorder?.dispose());
       unawaited(_stt?.stop());
+      unawaited(_liveSession?.stop());
     });
     return const VoiceState(status: VoiceStatus.idle);
   }
@@ -92,9 +92,13 @@ class VoiceController extends Notifier<VoiceState> {
     _stt ??= SpeechToText();
     if (!_nativeInitialized) {
       final ok = await _stt!.initialize(
-        onError: (e) => state = state.copyWith(error: e.errorMsg, soundLevel: 0),
+        onError: (e) => state = state.copyWith(
+          status: e.permanent ? VoiceStatus.unavailable : VoiceStatus.idle,
+          error: e.errorMsg,
+          soundLevel: 0,
+        ),
         onStatus: (status) {
-          if (status == 'notListening' && state.status == VoiceStatus.listening) {
+          if ((status == 'notListening' || status == 'done') && state.status == VoiceStatus.listening) {
             state = state.copyWith(status: VoiceStatus.idle, soundLevel: 0, clearError: true);
           }
         },
@@ -150,18 +154,33 @@ class VoiceController extends Notifier<VoiceState> {
       );
       return;
     }
-    final dir = await getTemporaryDirectory();
-    _recPath = p.join(dir.path, 'jarvis_rec_${DateTime.now().millisecondsSinceEpoch}.wav');
-    await _recorder!.start(
-      const RecordConfig(encoder: AudioEncoder.wav, sampleRate: 16000, numChannels: 1),
-      path: _recPath!,
+
+    const model = WhisperModel.baseEn;
+    String modelPath;
+    try {
+      modelPath = await _whisper!.downloadModel(model);
+    } catch (e) {
+      state = VoiceState(status: VoiceStatus.unavailable, error: 'Could not download speech model: $e');
+      return;
+    }
+
+    final audioStream = await _recorder!.startStream(
+      const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1),
     );
+    _liveSession = await startWhisperLiveSession(modelPath: modelPath, lang: 'en');
+
     state = state.copyWith(status: VoiceStatus.listening, transcript: '', soundLevel: 0, clearError: true);
 
-    _amplitudeSub?.cancel();
-    _amplitudeSub = _recorder!.onAmplitudeChanged(const Duration(milliseconds: 200)).listen((amp) {
+    _liveSession!.partials.listen((text) {
+      if (state.status == VoiceStatus.listening) state = state.copyWith(transcript: text, clearError: true);
+    });
+
+    _audioStreamSub?.cancel();
+    _audioStreamSub = audioStream.listen((chunk) {
       if (state.status != VoiceStatus.listening) return;
-      final normalized = ((amp.current + 45) / 45).clamp(0.0, 1.0).toDouble();
+      _liveSession?.feed(chunk);
+
+      final normalized = _pcm16Loudness(chunk);
       state = state.copyWith(soundLevel: normalized);
       if (normalized > 0.08) {
         _silenceTimer?.cancel();
@@ -177,19 +196,30 @@ class VoiceController extends Notifier<VoiceState> {
     });
   }
 
+  static double _pcm16Loudness(Uint8List chunk) {
+    if (chunk.length < 2) return 0;
+    final data = ByteData.sublistView(chunk);
+    final sampleCount = chunk.length ~/ 2;
+    var sumSquares = 0.0;
+    for (var i = 0; i < sampleCount; i++) {
+      final sample = data.getInt16(i * 2, Endian.little);
+      sumSquares += sample * sample;
+    }
+    final rms = sqrt(sumSquares / sampleCount);
+    return (rms / 3000).clamp(0.0, 1.0);
+  }
+
   Future<void> _stopAndTranscribeWhisper() async {
-    final path = _recPath;
-    if (path == null) return;
+    final session = _liveSession;
+    if (session == null) return;
+    _liveSession = null;
     _silenceTimer?.cancel();
     _maxDurationTimer?.cancel();
-    unawaited(_amplitudeSub?.cancel());
+    unawaited(_audioStreamSub?.cancel());
     try {
       await _recorder?.stop();
       state = state.copyWith(status: VoiceStatus.transcribing, soundLevel: 0);
-      final model = WhisperModel.baseEn;
-      await _whisper!.downloadModel(model);
-      final result = await _whisper!.transcribe(model: model, audioPath: path, lang: 'en');
-      final text = result?.transcription.text.trim() ?? '';
+      final text = (await session.stop()).trim();
       state = const VoiceState(status: VoiceStatus.idle);
       if (text.isNotEmpty) _onFinal?.call(text);
     } catch (e) {

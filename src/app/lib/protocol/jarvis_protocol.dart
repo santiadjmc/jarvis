@@ -156,6 +156,16 @@ class ConfigGetMessage {
   Map<String, dynamic> toJson() => {'type': 'config', 'id': id, 'action': 'get', 'key': key};
 }
 
+class ConfigSetMessage {
+  const ConfigSetMessage({required this.id, required this.key, required this.value});
+
+  final String id;
+  final String key;
+  final Object? value;
+
+  Map<String, dynamic> toJson() => {'type': 'config', 'id': id, 'action': 'set', 'key': key, 'value': value};
+}
+
 class TokenMessage extends ServerMessage {
   const TokenMessage({
     required this.id,

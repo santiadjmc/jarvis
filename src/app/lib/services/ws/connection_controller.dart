@@ -9,6 +9,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../../protocol/jarvis_protocol.dart';
 import '../../core/app_config.dart';
+import '../background/background_connection_service.dart';
 import '../device_tools/device_tool_executor.dart';
 
 enum ConnectionStatus { disconnected, connecting, connected, retrying }
@@ -200,6 +201,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
           _connectResult?.complete(true);
           _connectResult = null;
           _sendDeviceHello();
+          unawaited(_keepAliveInBackground());
         }
         _resetInactivityCheck();
         try {
@@ -256,6 +258,11 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     _reconnectAttempt++;
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, _open);
+  }
+
+  Future<void> _keepAliveInBackground() async {
+    await BackgroundConnectionService.requestPermissions();
+    await BackgroundConnectionService.start(text: 'Connected to ${_host ?? 'Jarvis'}');
   }
 
   void _startHeartbeat() {
@@ -345,6 +352,10 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     _send(JsonEncoder().convert(ConfigGetMessage(id: _uuid.v4(), key: key).toJson()));
   }
 
+  void sendConfigSet(String key, Object? value) {
+    _send(JsonEncoder().convert(ConfigSetMessage(id: _uuid.v4(), key: key, value: value).toJson()));
+  }
+
   void _send(String payload) {
     final channel = _channel;
     if (channel == null || state.status != ConnectionStatus.connected) return;
@@ -360,6 +371,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
 
   Future<void> disconnect() async {
     _manualClose = true;
+    unawaited(BackgroundConnectionService.stop());
     _heartbeat?.cancel();
     _heartbeat = null;
     _reconnectTimer?.cancel();

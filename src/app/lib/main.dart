@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 
 import 'core/app_config.dart';
+import 'services/background/background_connection_service.dart';
 import 'services/ws/connection_controller.dart';
 import 'ui/chat_screen.dart';
 import 'ui/setup_screen.dart';
@@ -10,6 +11,7 @@ import 'ui/setup_screen.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   JustAudioMediaKit.ensureInitialized();
+  BackgroundConnectionService.init();
   runApp(const ProviderScope(child: JarvisApp()));
 }
 
