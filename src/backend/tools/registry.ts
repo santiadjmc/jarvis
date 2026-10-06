@@ -14,6 +14,8 @@ import emailTools from "./implementations/email";
 import networkTools from "./implementations/network";
 import utilityTools from "./implementations/utility";
 import gitTools from "./implementations/git";
+import calendarTools from "./implementations/calendar";
+import browserTools from "./implementations/browser";
 import deviceTools from "./deviceTools";
 import type { ToolResult, ToolResultMessagePayload, ToolSpec } from "./types";
 
@@ -26,7 +28,7 @@ class ToolRegistry {
     private init(): void {
         if (this.initialized) return;
         this.initialized = true;
-        for (const spec of [...systemTools, ...fileTools, ...shellTools, ...webTools, ...memoryTools, ...scheduleTools, ...codeTools, ...emailTools, ...networkTools, ...utilityTools, ...gitTools, ...deviceTools]) {
+        for (const spec of [...systemTools, ...fileTools, ...shellTools, ...webTools, ...memoryTools, ...scheduleTools, ...codeTools, ...emailTools, ...networkTools, ...utilityTools, ...gitTools, ...calendarTools, ...browserTools, ...deviceTools]) {
             this.specs.set(spec.name, spec);
         }
         Log.info("Tool registry initialized", { tools: this.specs.size });
@@ -36,7 +38,13 @@ class ToolRegistry {
         const raw = (process.env.JARVIS_TOOLS || "*").trim();
         if (raw === "*") return true;
         if (raw.toLowerCase() === "none") return false;
-        return raw.split(",").map(s => s.trim().toLowerCase()).includes(name.toLowerCase());
+        const entries = raw.split(",").map(s => s.trim()).filter(Boolean);
+        const excludes = entries.filter(e => e.startsWith("-")).map(e => e.slice(1).toLowerCase());
+        const includes = entries.filter(e => !e.startsWith("-")).map(e => e.toLowerCase());
+        if (includes.length === 0 && excludes.length > 0) {
+            return !excludes.includes(name.toLowerCase());
+        }
+        return includes.includes(name.toLowerCase());
     }
 
     private deviceToolAllowed(name: string): boolean {
@@ -60,7 +68,7 @@ class ToolRegistry {
         const raw = (process.env.JARVIS_TOOLS || "*").trim();
         if (raw !== "*" && raw.toLowerCase() !== "none") {
             for (const wanted of raw.split(",").map(s => s.trim())) {
-                if (wanted && !list.includes(wanted)) list.push(wanted);
+                if (wanted && !wanted.startsWith("-") && !list.includes(wanted)) list.push(wanted);
             }
         }
         return list.sort();
