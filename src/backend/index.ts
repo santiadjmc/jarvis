@@ -232,9 +232,6 @@ function handleConfigMessage(client: { id: string }, message: { id: string; acti
             case "autoApprove":
                 value = isAutoApproveEnabled();
                 break;
-            case "picovoiceAccessKey":
-                value = process.env.PICOVOICE_ACCESS_KEY || null;
-                break;
             default:
                 connectionManager.send(client.id, JSON.stringify({
                     type: "error",
