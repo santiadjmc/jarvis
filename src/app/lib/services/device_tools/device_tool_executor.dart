@@ -1,15 +1,21 @@
 import 'dart:io' show Platform, Process;
 
+import 'package:another_telephony/telephony.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:installed_apps/installed_apps.dart';
+import 'package:permission_handler/permission_handler.dart' hide PermissionStatus;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_config.dart';
+
+final _telephony = Telephony.instance;
 
 final _localNotifications = FlutterLocalNotificationsPlugin();
 bool _notificationsInitialized = false;
@@ -96,6 +102,16 @@ List<String> capabilitiesFor(String deviceType) {
   if (deviceType == 'android' || deviceType == 'ios' || deviceType == 'linux' || deviceType == 'windows' || deviceType == 'macos') {
     caps.add('device:get_location');
   }
+  caps.add('device:play_music');
+  if (deviceType == 'android') {
+    caps.addAll(const [
+      'device:list_contacts',
+      'device:launch_app',
+      'device:list_installed_apps',
+      'device:call_number',
+      'device:send_sms',
+    ]);
+  }
   return caps;
 }
 
@@ -155,6 +171,12 @@ class DeviceToolExecutor {
         'device_show_notification' => _showNotification(params),
         'device_get_battery' => _getBattery(),
         'device_get_location' => _getLocation(),
+        'device_list_contacts' => _listContacts(params),
+        'device_launch_app' => _launchApp(params),
+        'device_list_installed_apps' => _listInstalledApps(params),
+        'device_play_music' => _playMusic(params),
+        'device_call_number' => _callNumber(params),
+        'device_send_sms' => _sendSms(params),
         'device_run_command' => _runCommand(params),
         _ => Future.value(DeviceToolResult.failure('Unknown device tool: $tool')),
       };
@@ -280,6 +302,118 @@ class DeviceToolExecutor {
         'accuracyMeters': position.accuracy,
         'timestamp': position.timestamp.toIso8601String(),
       });
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _listContacts(Map<String, dynamic> params) async {
+    try {
+      final permission = await FlutterContacts.permissions.request(PermissionType.read);
+      if (permission != PermissionStatus.granted && permission != PermissionStatus.limited) {
+        return DeviceToolResult.failure('Contacts permission denied');
+      }
+      final query = (params['query'] as String?)?.trim() ?? '';
+      final contacts = await FlutterContacts.getAll(
+        properties: {ContactProperty.phone},
+        filter: query.isNotEmpty ? ContactFilter.name(query) : null,
+      );
+      final results = contacts.take(50).map((c) => {
+            'name': c.displayName,
+            'phones': c.phones.map((p) => p.number).toList(),
+          }).toList();
+      return DeviceToolResult(success: true, data: {'count': results.length, 'contacts': results});
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _launchApp(Map<String, dynamic> params) async {
+    final app = (params['app'] as String?)?.trim() ?? '';
+    if (app.isEmpty) return DeviceToolResult.failure('app is required');
+    try {
+      final direct = await InstalledApps.startApp(app);
+      if (direct == true) return DeviceToolResult(success: true, data: {'launched': app, 'via': 'package_name'});
+
+      final apps = await InstalledApps.getInstalledApps();
+      final match = apps.cast<AppInfo?>().firstWhere(
+            (a) => a!.name.toLowerCase().contains(app.toLowerCase()),
+            orElse: () => null,
+          );
+      if (match == null) return DeviceToolResult.failure('No installed app found matching "$app"');
+      final launched = await InstalledApps.startApp(match.packageName);
+      return launched == true
+          ? DeviceToolResult(success: true, data: {'launched': match.name, 'packageName': match.packageName, 'via': 'name_match'})
+          : DeviceToolResult.failure('Found "${match.name}" but could not launch it');
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _listInstalledApps(Map<String, dynamic> params) async {
+    try {
+      final query = (params['query'] as String?)?.trim().toLowerCase() ?? '';
+      final apps = await InstalledApps.getInstalledApps();
+      final filtered = query.isEmpty ? apps : apps.where((a) => a.name.toLowerCase().contains(query)).toList();
+      final results = filtered.map((a) => {'name': a.name, 'packageName': a.packageName}).toList();
+      return DeviceToolResult(success: true, data: {'count': results.length, 'apps': results});
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _playMusic(Map<String, dynamic> params) async {
+    final query = (params['query'] as String?)?.trim() ?? '';
+    if (query.isEmpty) return DeviceToolResult.failure('query is required');
+    final app = (params['app'] as String?)?.trim().toLowerCase();
+    final encoded = Uri.encodeComponent(query);
+
+    Future<bool> tryLaunch(Uri uri) async {
+      try {
+        if (!await canLaunchUrl(uri)) return false;
+        return await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } catch (_) {
+        return false;
+      }
+    }
+
+    if (app != 'youtube_music') {
+      final spotifyOk = await tryLaunch(Uri.parse('spotify:search:$encoded'));
+      if (spotifyOk) return DeviceToolResult(success: true, data: {'query': query, 'app': 'spotify'});
+      if (app == 'spotify') return DeviceToolResult.failure('Spotify is not installed or could not handle the request');
+    }
+
+    final ytOk = await tryLaunch(Uri.parse('https://music.youtube.com/search?q=$encoded'));
+    return ytOk
+        ? DeviceToolResult(success: true, data: {'query': query, 'app': 'youtube_music'})
+        : DeviceToolResult.failure('Could not open a music app for "$query"');
+  }
+
+  Future<DeviceToolResult> _callNumber(Map<String, dynamic> params) async {
+    final number = (params['number'] as String?)?.trim() ?? '';
+    if (number.isEmpty) return DeviceToolResult.failure('number is required');
+    try {
+      if (!await Permission.phone.request().isGranted) {
+        return DeviceToolResult.failure('Phone call permission denied');
+      }
+      await _telephony.dialPhoneNumber(number);
+      return DeviceToolResult(success: true, data: {'calling': number});
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _sendSms(Map<String, dynamic> params) async {
+    final number = (params['number'] as String?)?.trim() ?? '';
+    final message = (params['message'] as String?) ?? '';
+    if (number.isEmpty) return DeviceToolResult.failure('number is required');
+    if (message.isEmpty) return DeviceToolResult.failure('message is required');
+    try {
+      if (!await Permission.sms.request().isGranted) {
+        return DeviceToolResult.failure('SMS permission denied');
+      }
+      await _telephony.sendSms(to: number, message: message);
+      return DeviceToolResult(success: true, data: {'to': number, 'sentChars': message.length});
     } catch (e) {
       return DeviceToolResult.failure('$e');
     }
