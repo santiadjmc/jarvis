@@ -20,6 +20,7 @@ subprojects {
 }
 
 subprojects {
+    if (project.path == ":app") return@subprojects
     afterEvaluate {
         extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.let { android ->
             val appCompileSdk = project(":app").extensions
