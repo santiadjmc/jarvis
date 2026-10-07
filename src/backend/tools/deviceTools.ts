@@ -313,6 +313,151 @@ const deviceSendSms: ToolSpec = {
     },
 };
 
+const deviceAccessibilityStatus: ToolSpec = {
+    name: "device_accessibility_status",
+    description: "Check whether Jarvis's screen-reading/automation (accessibility) service is enabled on the client device. If not, tell the user it needs to be turned on manually in Settings > Accessibility > Jarvis (Android requires this be done by hand; it cannot be auto-granted).",
+    category: "system",
+    requiresApproval: false,
+    timeoutMs: 15000,
+    runtime: "device",
+    capability: "device:accessibility_status",
+    parameters: {
+        type: "object",
+        properties: { device: deviceParam },
+    },
+    async execute() {
+        return unsupported("device_accessibility_status");
+    },
+};
+
+const deviceReadScreen: ToolSpec = {
+    name: "device_read_screen",
+    description: "Read everything currently visible on the client device's screen (text, buttons, labels across all apps, not just Jarvis) via the accessibility service. Use this to see what app/screen the user is on before tapping or typing something.",
+    category: "system",
+    requiresApproval: true,
+    timeoutMs: 20000,
+    runtime: "device",
+    capability: "device:read_screen",
+    parameters: {
+        type: "object",
+        properties: { device: deviceParam },
+    },
+    async execute() {
+        return unsupported("device_read_screen");
+    },
+};
+
+const deviceTap: ToolSpec = {
+    name: "device_tap",
+    description: "Tap a button/element on the client device's screen, identified by its visible text/label (from device_read_screen) or exact screen coordinates. This controls whatever app is currently on screen, not just Jarvis. Requires user approval.",
+    category: "system",
+    requiresApproval: true,
+    timeoutMs: 20000,
+    runtime: "device",
+    capability: "device:tap",
+    parameters: {
+        type: "object",
+        properties: {
+            device: deviceParam,
+            text: { type: "string", description: "Visible text/label of the element to tap (partial match)" },
+            x: { type: "number", description: "Screen x coordinate (alternative to text)" },
+            y: { type: "number", description: "Screen y coordinate (alternative to text)" },
+        },
+    },
+    async execute() {
+        return unsupported("device_tap");
+    },
+};
+
+const deviceTypeText: ToolSpec = {
+    name: "device_type_text",
+    description: "Type text into a focused/identified input field on the client device's current screen (any app). Requires user approval.",
+    category: "system",
+    requiresApproval: true,
+    timeoutMs: 20000,
+    runtime: "device",
+    capability: "device:type_text",
+    parameters: {
+        type: "object",
+        properties: {
+            device: deviceParam,
+            text: { type: "string", description: "Visible text/label/hint near the input field to identify it (partial match)" },
+            value: { type: "string", description: "Text to type into the field" },
+        },
+        required: ["value"],
+    },
+    async execute() {
+        return unsupported("device_type_text");
+    },
+};
+
+const deviceSwipe: ToolSpec = {
+    name: "device_swipe",
+    description: "Swipe/scroll on the client device's current screen from one point to another. Requires user approval.",
+    category: "system",
+    requiresApproval: true,
+    timeoutMs: 20000,
+    runtime: "device",
+    capability: "device:swipe",
+    parameters: {
+        type: "object",
+        properties: {
+            device: deviceParam,
+            x1: { type: "number", description: "Start x" },
+            y1: { type: "number", description: "Start y" },
+            x2: { type: "number", description: "End x" },
+            y2: { type: "number", description: "End y" },
+        },
+        required: ["x1", "y1", "x2", "y2"],
+    },
+    async execute() {
+        return unsupported("device_swipe");
+    },
+};
+
+const deviceNavigate: ToolSpec = {
+    name: "device_navigate",
+    description: "Press a system navigation button on the client device: 'back', 'home', or 'recents'.",
+    category: "system",
+    requiresApproval: false,
+    timeoutMs: 15000,
+    runtime: "device",
+    capability: "device:navigate",
+    parameters: {
+        type: "object",
+        properties: {
+            device: deviceParam,
+            action: { type: "string", enum: ["back", "home", "recents"], description: "Which navigation action to perform" },
+        },
+        required: ["action"],
+    },
+    async execute() {
+        return unsupported("device_navigate");
+    },
+};
+
+const deviceSendWhatsappMessage: ToolSpec = {
+    name: "device_send_whatsapp_message",
+    description: "Send a WhatsApp message to a phone number from the client device, fully automatically (no tap needed from the user) via the accessibility service. Requires the accessibility service to be enabled (see device_accessibility_status) and WhatsApp installed. Requires user approval.",
+    category: "communication",
+    requiresApproval: true,
+    timeoutMs: 30000,
+    runtime: "device",
+    capability: "device:send_whatsapp_message",
+    parameters: {
+        type: "object",
+        properties: {
+            device: deviceParam,
+            number: { type: "string", description: "Recipient phone number in international format, e.g. +15551234567" },
+            message: { type: "string", description: "Message text to send" },
+        },
+        required: ["number", "message"],
+    },
+    async execute() {
+        return unsupported("device_send_whatsapp_message");
+    },
+};
+
 const deviceRunCommand: ToolSpec = {
     name: "device_run_command",
     description: "Run a shell command on a client device (Android and desktop only; the phone app's own sandbox, not root).",
@@ -351,6 +496,13 @@ export const deviceToolCapabilities = [
     "device:play_music",
     "device:call_number",
     "device:send_sms",
+    "device:accessibility_status",
+    "device:read_screen",
+    "device:tap",
+    "device:type_text",
+    "device:swipe",
+    "device:navigate",
+    "device:send_whatsapp_message",
 ];
 
 const deviceTools: ToolSpec[] = [
@@ -369,6 +521,13 @@ const deviceTools: ToolSpec[] = [
     devicePlayMusic,
     deviceCallNumber,
     deviceSendSms,
+    deviceAccessibilityStatus,
+    deviceReadScreen,
+    deviceTap,
+    deviceTypeText,
+    deviceSwipe,
+    deviceNavigate,
+    deviceSendWhatsappMessage,
     deviceRunCommand,
 ];
 

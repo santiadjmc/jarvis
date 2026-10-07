@@ -14,6 +14,7 @@ import 'package:permission_handler/permission_handler.dart' hide PermissionStatu
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_config.dart';
+import '../automation/accessibility_service.dart';
 
 final _telephony = Telephony.instance;
 
@@ -110,6 +111,13 @@ List<String> capabilitiesFor(String deviceType) {
       'device:list_installed_apps',
       'device:call_number',
       'device:send_sms',
+      'device:accessibility_status',
+      'device:read_screen',
+      'device:tap',
+      'device:type_text',
+      'device:swipe',
+      'device:navigate',
+      'device:send_whatsapp_message',
     ]);
   }
   return caps;
@@ -177,6 +185,13 @@ class DeviceToolExecutor {
         'device_play_music' => _playMusic(params),
         'device_call_number' => _callNumber(params),
         'device_send_sms' => _sendSms(params),
+        'device_accessibility_status' => _accessibilityStatus(),
+        'device_read_screen' => _readScreen(),
+        'device_tap' => _tap(params),
+        'device_type_text' => _typeTextOnScreen(params),
+        'device_swipe' => _swipe(params),
+        'device_navigate' => _navigate(params),
+        'device_send_whatsapp_message' => _sendWhatsappMessage(params),
         'device_run_command' => _runCommand(params),
         _ => Future.value(DeviceToolResult.failure('Unknown device tool: $tool')),
       };
@@ -414,6 +429,126 @@ class DeviceToolExecutor {
       }
       await _telephony.sendSms(to: number, message: message);
       return DeviceToolResult(success: true, data: {'to': number, 'sentChars': message.length});
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _accessibilityStatus() async {
+    final enabled = await AccessibilityService.isEnabled();
+    if (!enabled) {
+      await AccessibilityService.openSettings();
+      return const DeviceToolResult(success: true, data: {
+        'enabled': false,
+        'openedSettings': true,
+        'note': 'Opened Settings for the user to enable the Jarvis accessibility service by hand (Android requires manual approval for this).',
+      });
+    }
+    return const DeviceToolResult(success: true, data: {'enabled': true});
+  }
+
+  Future<DeviceToolResult> _requireAccessibility() async {
+    if (await AccessibilityService.isEnabled()) return const DeviceToolResult(success: true);
+    return DeviceToolResult.failure(
+      'The accessibility service is not enabled. Call device_accessibility_status to prompt the user to enable it in Settings, then try again.',
+    );
+  }
+
+  Future<DeviceToolResult> _readScreen() async {
+    final gate = await _requireAccessibility();
+    if (!gate.success) return gate;
+    try {
+      final nodes = await AccessibilityService.readScreen();
+      return DeviceToolResult(success: true, data: {'count': nodes.length, 'elements': nodes});
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _tap(Map<String, dynamic> params) async {
+    final gate = await _requireAccessibility();
+    if (!gate.success) return gate;
+    final text = params['text'] as String?;
+    final x = (params['x'] as num?)?.toInt();
+    final y = (params['y'] as num?)?.toInt();
+    try {
+      final ok = (x != null && y != null)
+          ? await AccessibilityService.tapAt(x, y)
+          : await AccessibilityService.tapNode(text: text);
+      return ok ? const DeviceToolResult(success: true) : DeviceToolResult.failure('Could not find or tap the target element');
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _typeTextOnScreen(Map<String, dynamic> params) async {
+    final gate = await _requireAccessibility();
+    if (!gate.success) return gate;
+    final text = params['text'] as String?;
+    final value = (params['value'] as String?) ?? '';
+    if (value.isEmpty) return DeviceToolResult.failure('value is required');
+    try {
+      final ok = await AccessibilityService.typeText(text: text, value: value);
+      return ok ? const DeviceToolResult(success: true) : DeviceToolResult.failure('Could not find the target input field');
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _swipe(Map<String, dynamic> params) async {
+    final gate = await _requireAccessibility();
+    if (!gate.success) return gate;
+    final x1 = (params['x1'] as num?)?.toInt();
+    final y1 = (params['y1'] as num?)?.toInt();
+    final x2 = (params['x2'] as num?)?.toInt();
+    final y2 = (params['y2'] as num?)?.toInt();
+    if (x1 == null || y1 == null || x2 == null || y2 == null) return DeviceToolResult.failure('x1, y1, x2, y2 are required');
+    try {
+      final ok = await AccessibilityService.swipe(x1, y1, x2, y2);
+      return ok ? const DeviceToolResult(success: true) : DeviceToolResult.failure('Swipe gesture could not be dispatched');
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _navigate(Map<String, dynamic> params) async {
+    final gate = await _requireAccessibility();
+    if (!gate.success) return gate;
+    final action = (params['action'] as String?) ?? '';
+    try {
+      final ok = switch (action) {
+        'back' => await AccessibilityService.pressBack(),
+        'home' => await AccessibilityService.pressHome(),
+        'recents' => await AccessibilityService.pressRecents(),
+        _ => false,
+      };
+      if (action != 'back' && action != 'home' && action != 'recents') {
+        return DeviceToolResult.failure("action must be 'back', 'home', or 'recents'");
+      }
+      return ok ? const DeviceToolResult(success: true) : DeviceToolResult.failure('Navigation action failed');
+    } catch (e) {
+      return DeviceToolResult.failure('$e');
+    }
+  }
+
+  Future<DeviceToolResult> _sendWhatsappMessage(Map<String, dynamic> params) async {
+    final gate = await _requireAccessibility();
+    if (!gate.success) return gate;
+    final number = (params['number'] as String?)?.replaceAll(RegExp(r'[^\d+]'), '') ?? '';
+    final message = (params['message'] as String?) ?? '';
+    if (number.isEmpty) return DeviceToolResult.failure('number is required');
+    if (message.isEmpty) return DeviceToolResult.failure('message is required');
+    try {
+      final uri = Uri.parse('https://wa.me/${number.replaceAll('+', '')}?text=${Uri.encodeComponent(message)}');
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        return DeviceToolResult.failure('Could not open WhatsApp');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 2500));
+      var sent = await AccessibilityService.tapNode(viewId: 'com.whatsapp:id/send');
+      if (!sent) sent = await AccessibilityService.tapNode(text: 'Send');
+      return sent
+          ? DeviceToolResult(success: true, data: {'to': number, 'sentChars': message.length})
+          : DeviceToolResult.failure('Opened WhatsApp with the message ready but could not find/tap the Send button');
     } catch (e) {
       return DeviceToolResult.failure('$e');
     }
