@@ -29,8 +29,10 @@ const APPROVAL_TIMEOUT_MS = 60000;
 const DEVICE_TOOL_TIMEOUT_MS = 90000;
 
 function maxToolTurns(): number {
-    const parsed = parseInt(process.env.JARVIS_MAX_TOOL_TURNS || "6", 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 6;
+    const raw = process.env.JARVIS_MAX_TOOL_TURNS;
+    if (raw === undefined || raw.trim() === "") return Infinity;
+    const parsed = parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : Infinity;
 }
 
 class AIOrchestrator {
