@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../chat/chat_controller.dart';
 import '../core/app_config.dart';
 import '../protocol/jarvis_protocol.dart';
+import '../services/automation/system_assistant_service.dart';
 import '../services/ws/connection_controller.dart';
 
 class SettingsSheet extends ConsumerStatefulWidget {
@@ -22,6 +23,8 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
   late final TextEditingController _nameController;
   StreamSubscription<ServerMessage>? _configSub;
   List<String> _availableModels = [];
+  bool _assistantSupported = false;
+  bool _isDefaultAssistant = false;
 
   @override
   void initState() {
@@ -31,6 +34,7 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
     _keyController = TextEditingController(text: cfg.apiKey ?? '');
     _modelController = TextEditingController(text: cfg.model ?? '');
     _nameController = TextEditingController(text: cfg.deviceName ?? '');
+    unawaited(_loadAssistantStatus());
 
     final connection = ref.read(connectionControllerProvider.notifier);
     if (ref.read(connectionControllerProvider).status == ConnectionStatus.connected) {
@@ -93,6 +97,23 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
   Future<void> _resetConversation() async {
     await ref.read(chatControllerProvider.notifier).reset();
     if (mounted) Navigator.of(context).pop();
+  }
+
+  Future<void> _loadAssistantStatus() async {
+    final supported = await SystemAssistantService.isSupported();
+    final isDefault = supported ? await SystemAssistantService.isDefaultAssistant() : false;
+    if (mounted) {
+      setState(() {
+        _assistantSupported = supported;
+        _isDefaultAssistant = isDefault;
+      });
+    }
+  }
+
+  Future<void> _requestDefaultAssistant() async {
+    await SystemAssistantService.requestDefaultAssistant();
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    await _loadAssistantStatus();
   }
 
   Future<void> _setAutoApprove(bool value) async {
@@ -245,6 +266,26 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
             value: autoApprove,
             onChanged: connection.status == ConnectionStatus.connected ? _setAutoApprove : null,
           ),
+          if (_assistantSupported) ...[
+            const SizedBox(height: 4),
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(
+                _isDefaultAssistant ? Icons.check_circle : Icons.assistant_outlined,
+                color: _isDefaultAssistant ? Colors.greenAccent : Colors.white54,
+              ),
+              title: const Text('System assistant', style: TextStyle(fontSize: 14)),
+              subtitle: Text(
+                _isDefaultAssistant
+                    ? 'Jarvis opens on long-press-home / the assist gesture'
+                    : 'Set Jarvis as the default digital assistant app',
+                style: const TextStyle(fontSize: 12, color: Colors.white54),
+              ),
+              trailing: _isDefaultAssistant
+                  ? null
+                  : TextButton(onPressed: _requestDefaultAssistant, child: const Text('Set')),
+            ),
+          ],
           const SizedBox(height: 20),
           FilledButton.icon(
             onPressed: _saveAndMaybeReconnect,

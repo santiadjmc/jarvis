@@ -1,8 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 
+import 'chat/chat_controller.dart';
 import 'core/app_config.dart';
+import 'services/automation/system_assistant_service.dart';
 import 'services/background/background_connection_service.dart';
 import 'services/ws/connection_controller.dart';
 import 'ui/chat_screen.dart';
@@ -43,13 +47,34 @@ class HomeRouter extends ConsumerStatefulWidget {
   ConsumerState<HomeRouter> createState() => _HomeRouterState();
 }
 
-class _HomeRouterState extends ConsumerState<HomeRouter> {
+class _HomeRouterState extends ConsumerState<HomeRouter> with WidgetsBindingObserver {
   bool _autoConnectTried = false;
+  bool _pendingAssistantVoiceStart = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoConnect());
+    unawaited(_checkAssistantTrigger());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(_checkAssistantTrigger());
+    }
+  }
+
+  Future<void> _checkAssistantTrigger() async {
+    final triggered = await SystemAssistantService.consumeAssistantTrigger();
+    if (triggered && mounted) setState(() => _pendingAssistantVoiceStart = true);
   }
 
   Future<void> _maybeAutoConnect() async {
@@ -68,6 +93,13 @@ class _HomeRouterState extends ConsumerState<HomeRouter> {
 
     if (config.isConfigured && !_autoConnectTried && connection.status == ConnectionStatus.disconnected) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoConnect());
+    }
+
+    if (_pendingAssistantVoiceStart && connection.status == ConnectionStatus.connected) {
+      _pendingAssistantVoiceStart = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(chatControllerProvider.notifier).startVoiceInput();
+      });
     }
 
     final showChat = connection.status == ConnectionStatus.connected ||

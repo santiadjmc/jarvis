@@ -1,16 +1,24 @@
 package com.jarvis.jarvis
 
+import android.app.role.RoleManager
 import android.content.Intent
+import android.os.Build
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    companion object {
+        var pendingAssistantTrigger = false
+    }
+
     private val channelName = "jarvis/accessibility"
+    private val assistantChannelName = "jarvis/assistant"
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        configureAssistantChannel(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName).setMethodCallHandler { call, result ->
             val service = JarvisAccessibilityService.instance
             when (call.method) {
@@ -65,6 +73,37 @@ class MainActivity : FlutterActivity() {
                 "pressBack" -> result.success(service?.pressBack() ?: false)
                 "pressHome" -> result.success(service?.pressHome() ?: false)
                 "pressRecents" -> result.success(service?.pressRecents() ?: false)
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun configureAssistantChannel(flutterEngine: FlutterEngine) {
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, assistantChannelName).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isSupported" -> result.success(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                "isDefaultAssistant" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val roleManager = getSystemService(RoleManager::class.java)
+                        result.success(roleManager?.isRoleHeld(RoleManager.ROLE_ASSISTANT) ?: false)
+                    } else {
+                        result.success(false)
+                    }
+                }
+                "requestDefaultAssistant" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        val roleManager = getSystemService(RoleManager::class.java)
+                        if (roleManager != null && roleManager.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) {
+                            startActivity(roleManager.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT))
+                        }
+                    }
+                    result.success(null)
+                }
+                "consumeAssistantTrigger" -> {
+                    val triggered = pendingAssistantTrigger
+                    pendingAssistantTrigger = false
+                    result.success(triggered)
+                }
                 else -> result.notImplemented()
             }
         }
