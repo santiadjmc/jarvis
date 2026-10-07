@@ -167,7 +167,7 @@ class VoiceController extends Notifier<VoiceState> {
     final audioStream = await _recorder!.startStream(
       const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1),
     );
-    _liveSession = await startWhisperLiveSession(modelPath: modelPath, lang: 'en');
+    _liveSession = await startWhisperLiveSession(modelPath: modelPath, lang: 'auto');
 
     state = state.copyWith(status: VoiceStatus.listening, transcript: '', soundLevel: 0, clearError: true);
 

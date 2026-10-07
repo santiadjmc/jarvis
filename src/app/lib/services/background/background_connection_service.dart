@@ -83,6 +83,7 @@ class BackgroundConnectionService {
       }
       await FlutterForegroundTask.startService(
         serviceId: 821,
+        serviceTypes: const [ForegroundServiceTypes.dataSync, ForegroundServiceTypes.microphone],
         notificationTitle: 'Jarvis',
         notificationText: text,
         callback: jarvisForegroundTaskCallback,

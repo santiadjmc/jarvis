@@ -13,6 +13,7 @@ import '../services/ws/connection_controller.dart';
 import '../services/device_tools/device_tool_executor.dart';
 import '../services/voice/tts_controller.dart';
 import '../services/voice/voice_controller.dart';
+import '../services/voice/wake_word_service.dart';
 import '../core/app_config.dart';
 
 enum MessageRole { user, assistant, error }
@@ -309,6 +310,9 @@ class ChatController extends Notifier<ChatState> {
         state = state.copyWith(online: next.status == ConnectionStatus.connected);
         if (next.status == ConnectionStatus.connected) {
           ref.read(connectionControllerProvider.notifier).sendConfigGet('autoApprove');
+          ref.read(connectionControllerProvider.notifier).sendConfigGet('picovoiceAccessKey');
+        } else {
+          unawaited(WakeWordService.stop());
         }
       }
     });
@@ -323,6 +327,27 @@ class ChatController extends Notifier<ChatState> {
     ref.onDispose(() {
       _subscribed = false;
     });
+  }
+
+  void startVoiceInput() {
+    if (!state.online) return;
+    if (_activeRequestId != null) return;
+    final cfg = ref.read(settingsControllerProvider);
+    ref.read(voiceControllerProvider.notifier).start((text) {
+      send(text, model: cfg.model, voice: true);
+    });
+  }
+
+  String? _picovoiceAccessKey;
+
+  Future<void> syncWakeWord() async {
+    final cfg = ref.read(settingsControllerProvider);
+    final key = _picovoiceAccessKey;
+    if (!cfg.wakeWordEnabled || !state.online || key == null || key.trim().isEmpty) {
+      await WakeWordService.stop();
+      return;
+    }
+    await WakeWordService.start(key, startVoiceInput);
   }
 
   void setContinuousVoice(bool value) {
@@ -378,6 +403,9 @@ class ChatController extends Notifier<ChatState> {
   void _onConfigResponse(ConfigResponseMessage msg) {
     if (msg.key == 'autoApprove' && msg.value is bool) {
       state = state.copyWith(autoApprove: msg.value as bool);
+    } else if (msg.key == 'picovoiceAccessKey') {
+      _picovoiceAccessKey = msg.value as String?;
+      unawaited(syncWakeWord());
     }
   }
 

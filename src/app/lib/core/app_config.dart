@@ -5,7 +5,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AppConfig {
-  const AppConfig({this.host = defaultHost, this.apiKey, this.model, this.deviceId, this.deviceName, this.voiceReplies = true});
+  const AppConfig({
+    this.host = defaultHost,
+    this.apiKey,
+    this.model,
+    this.deviceId,
+    this.deviceName,
+    this.voiceReplies = true,
+    this.wakeWordEnabled = false,
+  });
 
   static const defaultHost = '';
   static const schema = 'ws';
@@ -18,6 +26,7 @@ class AppConfig {
   final String? deviceId;
   final String? deviceName;
   final bool voiceReplies;
+  final bool wakeWordEnabled;
 
   bool get isConfigured => apiKey != null && apiKey!.isNotEmpty && host.isNotEmpty;
 
@@ -39,7 +48,16 @@ class AppConfig {
 
   String get _shortId => effectiveDeviceId.replaceAll('-', '').substring(0, min(6, effectiveDeviceId.length));
 
-  AppConfig copyWith({String? host, String? apiKey, String? model, String? deviceId, String? deviceName, bool? voiceReplies, bool clearKey = false}) {
+  AppConfig copyWith({
+    String? host,
+    String? apiKey,
+    String? model,
+    String? deviceId,
+    String? deviceName,
+    bool? voiceReplies,
+    bool? wakeWordEnabled,
+    bool clearKey = false,
+  }) {
     return AppConfig(
       host: host ?? this.host,
       apiKey: clearKey ? null : (apiKey ?? this.apiKey),
@@ -47,6 +65,7 @@ class AppConfig {
       deviceId: deviceId ?? this.deviceId,
       deviceName: deviceName ?? this.deviceName,
       voiceReplies: voiceReplies ?? this.voiceReplies,
+      wakeWordEnabled: wakeWordEnabled ?? this.wakeWordEnabled,
     );
   }
 }
@@ -58,6 +77,7 @@ class SettingsController extends Notifier<AppConfig> {
   static const _kDeviceId = 'jarvis.device_id';
   static const _kDeviceName = 'jarvis.device_name';
   static const _kVoiceReplies = 'jarvis.voice_replies';
+  static const _kWakeWordEnabled = 'jarvis.wake_word_enabled';
   int _revision = 0;
 
   @override
@@ -83,10 +103,18 @@ class SettingsController extends Notifier<AppConfig> {
       deviceId: deviceId,
       deviceName: prefs.getString(_kDeviceName),
       voiceReplies: prefs.getBool(_kVoiceReplies) ?? true,
+      wakeWordEnabled: prefs.getBool(_kWakeWordEnabled) ?? false,
     );
   }
 
-  Future<void> save({String? host, String? apiKey, String? model, String? deviceName, bool? voiceReplies}) async {
+  Future<void> save({
+    String? host,
+    String? apiKey,
+    String? model,
+    String? deviceName,
+    bool? voiceReplies,
+    bool? wakeWordEnabled,
+  }) async {
     _revision++;
     final cfg = state;
     state = AppConfig(
@@ -96,6 +124,7 @@ class SettingsController extends Notifier<AppConfig> {
       deviceId: cfg.deviceId,
       deviceName: deviceName ?? cfg.deviceName,
       voiceReplies: voiceReplies ?? cfg.voiceReplies,
+      wakeWordEnabled: wakeWordEnabled ?? cfg.wakeWordEnabled,
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kHost, state.host);
@@ -103,6 +132,7 @@ class SettingsController extends Notifier<AppConfig> {
     if (model != null) await prefs.setString(_kModel, model);
     if (deviceName != null) await prefs.setString(_kDeviceName, deviceName);
     if (voiceReplies != null) await prefs.setBool(_kVoiceReplies, voiceReplies);
+    if (wakeWordEnabled != null) await prefs.setBool(_kWakeWordEnabled, wakeWordEnabled);
   }
 
   Future<void> clear() async {
@@ -113,6 +143,7 @@ class SettingsController extends Notifier<AppConfig> {
     await prefs.remove(_kModel);
     await prefs.remove(_kDeviceName);
     await prefs.remove(_kVoiceReplies);
+    await prefs.remove(_kWakeWordEnabled);
     AppConfig._storedDeviceId = null;
     state = const AppConfig();
   }

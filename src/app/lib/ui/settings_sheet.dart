@@ -218,6 +218,22 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
           const SizedBox(height: 4),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
+            title: const Text('"Hey Jarvis" wake word', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              'Always listen for "Jarvis" on this device and start voice input automatically',
+              style: TextStyle(fontSize: 12, color: Colors.white54),
+            ),
+            value: ref.watch(settingsControllerProvider).wakeWordEnabled,
+            onChanged: connection.status == ConnectionStatus.connected
+                ? (value) async {
+                    await ref.read(settingsControllerProvider.notifier).save(wakeWordEnabled: value);
+                    await ref.read(chatControllerProvider.notifier).syncWakeWord();
+                  }
+                : null,
+          ),
+          const SizedBox(height: 4),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
             title: const Text('Full autonomous mode', style: TextStyle(fontSize: 14)),
             subtitle: Text(
               autoApprove

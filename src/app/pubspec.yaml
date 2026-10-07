@@ -35,6 +35,7 @@ dependencies:
   android_intent_plus: ^6.1.0
   permission_handler: ^13.0.2
   another_telephony: ^0.4.1
+  porcupine_flutter: ^4.0.0
 
 dev_dependencies:
   flutter_test:
