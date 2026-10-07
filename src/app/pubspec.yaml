@@ -41,6 +41,16 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
 
+# porcupine_flutter 4.0.0 (the current latest release) hardcodes
+# compileSdkVersion 31 in its own Android build file, too low for the
+# AndroidX libraries (fragment, lifecycle, activity, window) it bundles
+# itself - a packaging bug, not something fixable from this project's
+# own Gradle files. Vendored locally with just that one line bumped to
+# 36 until Picovoice ships a fixed release upstream.
+dependency_overrides:
+  porcupine_flutter:
+    path: third_party/porcupine_flutter
+
 flutter:
   uses-material-design: true
   fonts:

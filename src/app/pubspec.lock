@@ -691,10 +691,9 @@ packages:
   porcupine_flutter:
     dependency: "direct main"
     description:
-      name: porcupine_flutter
-      sha256: a8c6350a2681052918923bc3bb39a01846999020260770dff582a94cb1ba18ec
-      url: "https://pub.dev"
-    source: hosted
+      path: "third_party/porcupine_flutter"
+      relative: true
+    source: path
     version: "4.0.0"
   posix:
     dependency: transitive
