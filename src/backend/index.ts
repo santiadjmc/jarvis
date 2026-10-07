@@ -16,8 +16,10 @@ import cacheManager from "./managers/CacheManager";
 import ttsService from "./voice/TtsService";
 import { listDueTasks } from "./agent/Scheduler/taskStore";
 import { isAutoApproveEnabled, setAutoApprove } from "./agent/runtimeConfig";
+import { status as googleStatus, isConfigured as googleConfigured } from "./agent/Google/googleAuth";
 import { getLocalAddresses } from "./utils/network";
 import Log from "./Log";
+import { v4 as uuid } from "uuid";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -160,6 +162,7 @@ async function boot(): Promise<void> {
     }, 60_000);
 
     startProactiveScheduler();
+    startGoogleAuthWatchdog();
 
     const aiConfig = getAIConfig();
     const llmAvailable = await llmClient.isAvailable();
@@ -306,6 +309,29 @@ function startProactiveScheduler(): void {
         } finally {
             running = false;
         }
+    }, CHECK_INTERVAL);
+}
+
+function startGoogleAuthWatchdog(): void {
+    const CHECK_INTERVAL = 60 * 60 * 1000;
+    const NUDGE_WITHIN_DAYS = 1;
+    let lastNudgeAt = 0;
+
+    setInterval(() => {
+        if (!googleConfigured()) return;
+        const info = googleStatus();
+        if (!info.connected || info.expiresInDays === null) return;
+        if (info.expiresInDays > NUDGE_WITHIN_DAYS) return;
+        if (Date.now() - lastNudgeAt < 20 * 60 * 60 * 1000) return;
+
+        lastNudgeAt = Date.now();
+        const streamId = uuid();
+        const text = info.expiresInDays <= 0
+            ? "Heads up — my connection to your Google account just expired. Open /oauth/google/start in a browser whenever you get a chance to reconnect it."
+            : `Heads up — my connection to your Google account expires in about ${info.expiresInDays} day${info.expiresInDays === 1 ? "" : "s"}. Open /oauth/google/start in a browser to reconnect it before then.`;
+        connectionManager.broadcast(JSON.stringify({ type: "token", id: uuid(), content: text, requestId: streamId, kind: "assistant", proactive: true }));
+        connectionManager.broadcast(JSON.stringify({ type: "stream_end", id: uuid(), requestId: streamId, fullResponse: text, model: "system", proactive: true }));
+        Log.info("Google auth expiry nudge sent", { expiresInDays: info.expiresInDays });
     }, CHECK_INTERVAL);
 }
 

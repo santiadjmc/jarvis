@@ -287,14 +287,14 @@ class _AssistantBubbleState extends ConsumerState<_AssistantBubble> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (message.proactive) ...[
-            const Row(
+            Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.bolt, size: 14, color: Color(0xFF00E5FF)),
-                SizedBox(width: 4),
+                Icon(message.subagent ? Icons.smart_toy_outlined : Icons.bolt, size: 14, color: const Color(0xFF00E5FF)),
+                const SizedBox(width: 4),
                 Text(
-                  'Jarvis reached out',
-                  style: TextStyle(color: Color(0xFF00E5FF), fontSize: 11.5, fontWeight: FontWeight.w600),
+                  message.subagent ? 'Subagent report' : 'Jarvis reached out',
+                  style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 11.5, fontWeight: FontWeight.w600),
                 ),
               ],
             ),

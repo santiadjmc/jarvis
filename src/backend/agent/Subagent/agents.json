@@ -1,0 +1,16 @@
+{
+    "agents": [
+        {
+            "id": "researcher",
+            "name": "Researcher",
+            "description": "Specializes in deep, thorough research: searching the web, reading and cross-referencing multiple sources, and synthesizing findings clearly. Prefers accuracy and citing where information came from over speed.",
+            "model": "nvidia/nemotron-3-super-120b-a12b"
+        },
+        {
+            "id": "developer",
+            "name": "Developer",
+            "description": "Specializes in writing, reading, and debugging code: working directly in the filesystem, running shell commands, using git, and producing correct, working code changes rather than just describing them.",
+            "model": "moonshotai/kimi-k3"
+        }
+    ]
+}

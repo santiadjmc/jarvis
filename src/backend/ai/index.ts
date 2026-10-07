@@ -17,7 +17,13 @@ import type { ToolResult } from "../tools/types";
 import { searchMemory } from "../agent/Memory/memoryStore";
 import { markRan, type ScheduledTask } from "../agent/Scheduler/taskStore";
 import { isAutoApproveEnabled } from "../agent/runtimeConfig";
+import { registerSubagentRunner, type SubagentRequest } from "../agent/Subagent/subagentRunner";
 import Log from "../Log";
+
+function maxSubagents(): number {
+    const parsed = parseInt(process.env.JARVIS_MAX_SUBAGENTS || "3", 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 3;
+}
 
 const APPROVAL_TIMEOUT_MS = 60000;
 const DEVICE_TOOL_TIMEOUT_MS = 90000;
@@ -36,10 +42,18 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
     private readonly PROACTIVE_SYSTEM_PROMPT = `You are Jarvis, running autonomously on a schedule you set up for yourself earlier, with no user watching right now. Use the tools available to complete the task, then write a short, natural message as if speaking directly to the user — it will be delivered immediately to every device they are connected from (phone, desktop, etc). Never mention that this is a "scheduled task" or "trigger" mechanically; just deliver it the way Jarvis naturally would.`;
 
+    private subagentSystemPrompt(agentName?: string, agentDescription?: string): string {
+        const persona = agentName
+            ? `You are "${agentName}", a specialized Jarvis subagent${agentDescription ? ` (${agentDescription})` : ""}, just delegated a task`
+            : `You are a focused subagent Jarvis just delegated a task to`;
+        return `${persona}, so the main conversation could keep going without waiting on you. You have no memory of that conversation beyond the task description you were given. Use the tools available to complete it, then write a short, natural report of what you did and found — it will be delivered to the user on every device they are connected from, as if Jarvis itself is speaking. Never mention being a "subagent" or "delegated task" mechanically; just report back the way Jarvis naturally would.`;
+    }
+
     private voiceRequests = new Set<string>();
     private speechBuffer = new Map<string, string>();
     private speechSeq = new Map<string, number>();
     private speechTail = new Map<string, Promise<void>>();
+    private activeSubagents = new Set<string>();
 
     async handleChat(client: AuthenticatedClient, message: any): Promise<void> {
         const requestId = message.id as string;
@@ -700,6 +714,107 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         }
     }
 
+    spawnSubagent(req: SubagentRequest): string | null {
+        if (this.activeSubagents.size >= maxSubagents()) return null;
+        const taskId = uuid();
+        this.activeSubagents.add(taskId);
+        this.runSubagentTask(taskId, req).catch(err => {
+            Log.error("Subagent task crashed", err);
+        });
+        return taskId;
+    }
+
+    private async runSubagentTask(taskId: string, req: SubagentRequest): Promise<void> {
+        const streamId = uuid();
+        const model = req.model || modelManager.getActive();
+        const systemPrompt = this.subagentSystemPrompt(req.agentName, req.agentDescription);
+        const conversation = conversationManager.getOrCreate(`subagent-${taskId}`, "subagent", systemPrompt, model);
+
+        conversationManager.addMessage(conversation.id, {
+            role: "user",
+            content: `[Delegated task] ${req.instructions}`,
+            timestamp: Date.now(),
+            model,
+        });
+
+        const toolDefs = toolRegistry.defsForOllama({ safeOnly: true });
+        const turns = maxToolTurns();
+        let assistantContent = "";
+
+        try {
+            for (let turn = 0; turn < turns; turn++) {
+                const conv = conversationManager.get(conversation.id);
+                if (!conv) break;
+
+                const messages = promptBuilder.buildAgentMessages(conv.messages, toolDefs, conv.systemPrompt);
+                let turnContent = "";
+                let toolCalls: OllamaToolCall[] = [];
+                let sawToolCalls = false;
+
+                const tokenStream = llmClient.chatStream({ model, messages, stream: true, tools: toolDefs });
+
+                for await (const chunk of tokenStream) {
+                    if (chunk.content) {
+                        turnContent += chunk.content;
+                        assistantContent += chunk.content;
+                        const tokenMsg: TokenMessage = {
+                            type: "token",
+                            id: uuid(),
+                            content: chunk.content,
+                            requestId: streamId,
+                            kind: "assistant",
+                            proactive: true,
+                            subagent: true,
+                        };
+                        connectionManager.broadcast(JSON.stringify(tokenMsg));
+                    }
+                    if (Array.isArray(chunk.toolCalls) && chunk.toolCalls.length > 0) {
+                        sawToolCalls = true;
+                        toolCalls = chunk.toolCalls as OllamaToolCall[];
+                    }
+                }
+
+                if (sawToolCalls && toolCalls.length > 0) {
+                    toolCalls = this.dedupeToolCalls(toolCalls);
+                    conversationManager.addMessage(conversation.id, {
+                        role: "assistant",
+                        content: turnContent,
+                        timestamp: Date.now(),
+                        model,
+                        toolCalls,
+                    });
+                    await this.executeSafeToolCalls(conversation.id, toolCalls);
+                    continue;
+                }
+
+                conversationManager.addMessage(conversation.id, {
+                    role: "assistant",
+                    content: turnContent,
+                    timestamp: Date.now(),
+                    model,
+                });
+                break;
+            }
+
+            const endMsg: StreamEndMessage = {
+                type: "stream_end",
+                id: uuid(),
+                requestId: streamId,
+                fullResponse: assistantContent,
+                model,
+                proactive: true,
+                subagent: true,
+            };
+            connectionManager.broadcast(JSON.stringify(endMsg));
+            Log.info("Subagent task delivered", { taskId, responseLength: assistantContent.length });
+        } catch (err: any) {
+            Log.error("Subagent task failed", err);
+        } finally {
+            this.activeSubagents.delete(taskId);
+            this.reWarmFastAfterDeep(model);
+        }
+    }
+
     private async executeSafeToolCalls(conversationId: string, calls: OllamaToolCall[]): Promise<void> {
         for (const call of calls) {
             const name = call.function?.name;
@@ -869,4 +984,5 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 }
 
 const aiOrchestrator = new AIOrchestrator();
+registerSubagentRunner((req) => aiOrchestrator.spawnSubagent(req));
 export default aiOrchestrator;

@@ -1,4 +1,6 @@
 import { addTask, listTasks, removeTask } from "../../agent/Scheduler/taskStore";
+import { delegateSubagent } from "../../agent/Subagent/subagentRunner";
+import { listAgents, getAgent } from "../../agent/Subagent/agentRegistry";
 import type { ToolContext, ToolResult, ToolSpec } from "../types";
 
 function serializeTask(t: { id: string; instructions: string; dueAt: number; recurringEveryMs: number | null }) {
@@ -91,5 +93,62 @@ const cancelScheduledTask: ToolSpec = {
     },
 };
 
-const scheduleTools: ToolSpec[] = [scheduleTask, listScheduledTasks, cancelScheduledTask];
+const agentPresetList = listAgents().map(a => `${a.id} (${a.name}: ${a.description})`).join("; ");
+
+const delegateTask: ToolSpec = {
+    name: "delegate_task",
+    description: `Spawn an independent subagent to work on a task in the background, right now, while you keep talking to the user in this conversation instead of waiting. The subagent runs its own tool-calling loop with no memory of this conversation (give it full context in the instructions) and reports its findings directly to the user on every connected device when it finishes. Use this for slower, multi-step, or tangential work you don't want to block your current reply on — e.g. 'research X and report back' while you keep chatting about something else.${agentPresetList ? ` Available specialized agent presets (optional, each overrides the model used): ${agentPresetList}.` : ""}`,
+    category: "schedule",
+    requiresApproval: false,
+    timeoutMs: 5000,
+    parameters: {
+        type: "object",
+        properties: {
+            instructions: {
+                type: "string",
+                description: "A clear, fully self-contained task description for the subagent. It cannot see this conversation, so include everything it needs to know.",
+            },
+            agent: {
+                type: "string",
+                description: "Optional id of a specialized agent preset to run this as (see tool description for the list). Omit to use the default model.",
+            },
+        },
+        required: ["instructions"],
+    },
+    async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+        const instructions = typeof params.instructions === "string" ? params.instructions.trim() : "";
+        if (!instructions) return { success: false, data: null, error: "instructions is required" };
+
+        let agentId: string | undefined;
+        let agentName: string | undefined;
+        let agentDescription: string | undefined;
+        let model: string | undefined;
+        if (typeof params.agent === "string" && params.agent.trim()) {
+            const agent = getAgent(params.agent.trim());
+            if (!agent) return { success: false, data: null, error: `Unknown agent preset: ${params.agent}. Use list_agents to see available presets.` };
+            agentId = agent.id;
+            agentName = agent.name;
+            agentDescription = agent.description;
+            model = agent.model;
+        }
+
+        const taskId = delegateSubagent({ instructions, model, agentId, agentName, agentDescription });
+        if (!taskId) return { success: false, data: null, error: "Too many subagents are already running; wait for one to finish first." };
+        return { success: true, data: { taskId, agent: agentId ?? null, model: model ?? null, spawned: true, note: "Running in the background now; the result will be delivered to the user when it's done." } };
+    },
+};
+
+const listAgentsTool: ToolSpec = {
+    name: "list_agents",
+    description: "List the specialized subagent presets available for delegate_task.",
+    category: "schedule",
+    requiresApproval: false,
+    timeoutMs: 5000,
+    parameters: { type: "object", properties: {} },
+    async execute(_params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+        return { success: true, data: listAgents() };
+    },
+};
+
+const scheduleTools: ToolSpec[] = [scheduleTask, listScheduledTasks, cancelScheduledTask, delegateTask, listAgentsTool];
 export default scheduleTools;

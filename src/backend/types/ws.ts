@@ -119,6 +119,7 @@ export interface TokenMessage {
     requestId: string;
     kind?: "assistant" | "thinking";
     proactive?: boolean;
+    subagent?: boolean;
 }
 
 export interface StreamEndMessage {
@@ -129,6 +130,7 @@ export interface StreamEndMessage {
     usage?: TokenUsage;
     model: string;
     proactive?: boolean;
+    subagent?: boolean;
 }
 
 export interface StatusMessage {
