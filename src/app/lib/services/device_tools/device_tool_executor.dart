@@ -1,22 +1,22 @@
 import 'dart:io' show Platform, Process;
 
-import 'package:another_telephony/telephony.dart';
 import 'package:battery_plus/battery_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter_phone_dialer/flutter_phone_dialer.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:installed_apps/installed_apps.dart';
-import 'package:permission_handler/permission_handler.dart' hide PermissionStatus;
+import 'package:telephony_sms/telephony_sms.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/app_config.dart';
 import '../automation/accessibility_service.dart';
 
-final _telephony = Telephony.instance;
+const _telephonySms = TelephonySMS();
 
 final _localNotifications = FlutterLocalNotificationsPlugin();
 bool _notificationsInitialized = false;
@@ -408,11 +408,10 @@ class DeviceToolExecutor {
     final number = (params['number'] as String?)?.trim() ?? '';
     if (number.isEmpty) return DeviceToolResult.failure('number is required');
     try {
-      if (!await Permission.phone.request().isGranted) {
-        return DeviceToolResult.failure('Phone call permission denied');
-      }
-      await _telephony.dialPhoneNumber(number);
-      return DeviceToolResult(success: true, data: {'calling': number});
+      final called = await FlutterPhoneDialer.callNumber(number);
+      return called
+          ? DeviceToolResult(success: true, data: {'calling': number})
+          : DeviceToolResult.failure('Call permission denied or could not be placed');
     } catch (e) {
       return DeviceToolResult.failure('$e');
     }
@@ -424,11 +423,13 @@ class DeviceToolExecutor {
     if (number.isEmpty) return DeviceToolResult.failure('number is required');
     if (message.isEmpty) return DeviceToolResult.failure('message is required');
     try {
-      if (!await Permission.sms.request().isGranted) {
+      if (!await _telephonySms.requestPermission()) {
         return DeviceToolResult.failure('SMS permission denied');
       }
-      await _telephony.sendSms(to: number, message: message);
+      await _telephonySms.sendSMS(phone: number, message: message);
       return DeviceToolResult(success: true, data: {'to': number, 'sentChars': message.length});
+    } on TelephonySmsException catch (e) {
+      return DeviceToolResult.failure(e.toString());
     } catch (e) {
       return DeviceToolResult.failure('$e');
     }

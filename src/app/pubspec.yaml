@@ -32,9 +32,8 @@ dependencies:
   geolocator: ^14.1.1
   flutter_contacts: ^2.6.0
   installed_apps: ^2.2.0
-  android_intent_plus: ^6.1.0
-  permission_handler: ^13.0.2
-  another_telephony: ^0.4.1
+  telephony_sms: ^0.1.0
+  flutter_phone_dialer: ^0.1.0
   porcupine_flutter: ^4.0.0
 
 dev_dependencies:
