@@ -11,6 +11,7 @@ import 'services/background/background_connection_service.dart';
 import 'services/ws/connection_controller.dart';
 import 'ui/chat_screen.dart';
 import 'ui/setup_screen.dart';
+import 'ui/theme/jarvis_theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,14 +28,7 @@ class JarvisApp extends StatelessWidget {
     return MaterialApp(
       title: 'Jarvis',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF00E5FF),
-          brightness: Brightness.dark,
-        ),
-        scaffoldBackgroundColor: const Color(0xFF0B1020),
-      ),
+      theme: buildJarvisTheme(),
       home: const HomeRouter(),
     );
   }

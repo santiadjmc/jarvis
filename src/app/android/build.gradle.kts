@@ -19,6 +19,19 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+subprojects {
+    afterEvaluate {
+        extensions.findByType(com.android.build.gradle.BaseExtension::class.java)?.let { android ->
+            val appCompileSdk = project(":app").extensions
+                .findByType(com.android.build.gradle.BaseExtension::class.java)
+                ?.compileSdkVersion
+            if (appCompileSdk != null && android.compileSdkVersion != appCompileSdk) {
+                android.compileSdkVersion(appCompileSdk)
+            }
+        }
+    }
+}
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

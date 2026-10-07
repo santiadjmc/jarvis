@@ -10,6 +10,7 @@ import '../services/voice/tts_controller.dart';
 import '../services/voice/voice_controller.dart';
 import '../services/ws/connection_controller.dart';
 import 'settings_sheet.dart';
+import 'theme/jarvis_theme.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
   const ChatScreen({super.key});
@@ -51,6 +52,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Widget build(BuildContext context) {
     final chat = ref.watch(chatControllerProvider);
     final connection = ref.watch(connectionControllerProvider);
+    final busy = chat.messages.any((m) => !m.complete);
+    final speaking = ref.watch(ttsControllerProvider).status == TtsStatus.playing;
 
     final streaming = chat.messages.any((m) => !m.complete);
     final lastIsUser = chat.messages.isNotEmpty && chat.messages.last.role == MessageRole.user;
@@ -65,12 +68,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Row(
+        title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _PulsingCore(),
-            SizedBox(width: 8),
-            Text('JARVIS'),
+            ReactorCore(size: 22, active: busy || speaking),
+            const SizedBox(width: 10),
+            const Text('JARVIS'),
           ],
         ),
         actions: [
@@ -78,11 +81,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             Padding(
               padding: const EdgeInsets.only(right: 16),
               child: Center(
-                child: Text(
-                  connection.status == ConnectionStatus.connecting
-                      ? 'connecting…'
-                      : 'reconnecting…',
-                  style: const TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                child: HudReadout(
+                  label: connection.status == ConnectionStatus.connecting ? 'CONNECTING' : 'RECONNECTING',
+                  color: JarvisColors.amber,
                 ),
               ),
             )
@@ -90,26 +91,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             Padding(
               padding: const EdgeInsets.only(right: 16),
               child: Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.circle, size: 8, color: _latencyColor(connection.latencyMs!)),
-                    const SizedBox(width: 6),
-                    Text(
-                      '${connection.latencyMs}ms',
-                      style: const TextStyle(color: Colors.white38, fontSize: 12),
-                    ),
-                  ],
+                child: HudReadout(
+                  label: '${connection.latencyMs}MS',
+                  color: _latencyColor(connection.latencyMs!),
                 ),
               ),
             ),
           IconButton(
-            icon: const Icon(Icons.settings_outlined, color: Colors.white70),
+            icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
             onPressed: () => showModalBottomSheet<void>(
               context: context,
               isScrollControlled: true,
-              backgroundColor: const Color(0xFF101830),
+              backgroundColor: JarvisColors.panel,
               builder: (_) => const SettingsSheet(),
             ),
           ),
@@ -137,58 +131,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 }
 
 Color _latencyColor(int latencyMs) {
-  if (latencyMs < 150) return const Color(0xFF7CF29D);
-  if (latencyMs < 400) return const Color(0xFFFFB74D);
-  return const Color(0xFFFF8A80);
-}
-
-class _PulsingCore extends ConsumerStatefulWidget {
-  const _PulsingCore();
-
-  @override
-  ConsumerState<_PulsingCore> createState() => _PulsingCoreState();
-}
-
-class _PulsingCoreState extends ConsumerState<_PulsingCore> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(seconds: 2),
-  )..repeat(reverse: true);
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final busy = ref.watch(chatControllerProvider.select((s) => s.messages.any((m) => !m.complete)));
-    final speaking = ref.watch(ttsControllerProvider).status == TtsStatus.playing;
-    final active = busy || speaking;
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, _) {
-        final t = active ? _controller.value : 0.0;
-        return Container(
-          width: 20,
-          height: 20,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.black.withValues(alpha: 0.4),
-            border: Border.all(color: const Color(0xFF00E5FF), width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                color: const Color(0xFF00E5FF).withValues(alpha: 0.25 + t * 0.35),
-                blurRadius: 6 + t * 10,
-                spreadRadius: t * 2,
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
+  if (latencyMs < 150) return JarvisColors.signal;
+  if (latencyMs < 400) return JarvisColors.amber;
+  return JarvisColors.danger;
 }
 
 class _EmptyState extends StatelessWidget {
@@ -200,16 +145,16 @@ class _EmptyState extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.hexagon_outlined, color: Color(0xFF00E5FF), size: 56),
-          const SizedBox(height: 16),
-          Text(
+          const ReactorCore(size: 64),
+          const SizedBox(height: 20),
+          const Text(
             'Connected to Jarvis',
-            style: Theme.of(context).textTheme.titleMedium!.copyWith(color: Colors.white70),
+            style: TextStyle(fontFamily: JarvisType.display, fontSize: 16, fontWeight: FontWeight.w600, color: JarvisColors.ink),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           const Text(
             'Ask me anything.',
-            style: TextStyle(color: Colors.white38),
+            style: TextStyle(color: JarvisColors.inkMuted, fontSize: 13.5),
           ),
         ],
       ),
@@ -241,16 +186,14 @@ class _UserBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.centerRight,
-      child: Container(
+      child: HudPanel(
         margin: const EdgeInsets.only(bottom: 12, left: 48),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        decoration: BoxDecoration(
-          color: const Color(0xFF122A3A),
-          borderRadius: BorderRadius.circular(18),
-        ),
+        color: JarvisColors.panelRaised,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+        bevel: 12,
         child: Text(
           message.content,
-          style: const TextStyle(color: Colors.white, fontSize: 15),
+          style: const TextStyle(color: JarvisColors.ink, fontSize: 15),
         ),
       ),
     );
@@ -275,14 +218,9 @@ class _AssistantBubbleState extends ConsumerState<_AssistantBubble> {
         message.thinking.isNotEmpty ||
         message.tools.isNotEmpty;
 
-    return Container(
+    return HudPanel(
       margin: const EdgeInsets.only(bottom: 12, right: 48),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF101830),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: message.proactive ? const Color(0xFF00E5FF).withValues(alpha: 0.4) : Colors.white10),
-      ),
+      accentColor: message.proactive ? JarvisColors.cyan.withValues(alpha: 0.5) : null,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -290,11 +228,11 @@ class _AssistantBubbleState extends ConsumerState<_AssistantBubble> {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(message.subagent ? Icons.smart_toy_outlined : Icons.bolt, size: 14, color: const Color(0xFF00E5FF)),
+                Icon(message.subagent ? Icons.smart_toy_outlined : Icons.bolt, size: 14, color: JarvisColors.cyan),
                 const SizedBox(width: 4),
                 Text(
                   message.subagent ? 'Subagent report' : 'Jarvis reached out',
-                  style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 11.5, fontWeight: FontWeight.w600),
+                  style: const TextStyle(color: JarvisColors.cyan, fontSize: 11.5, fontWeight: FontWeight.w600),
                 ),
               ],
             ),
@@ -306,7 +244,7 @@ class _AssistantBubbleState extends ConsumerState<_AssistantBubble> {
             const SizedBox(height: 8),
             Text(
               message.errorMessage!,
-              style: const TextStyle(color: Colors.redAccent, fontSize: 13),
+              style: const TextStyle(color: JarvisColors.danger, fontSize: 13),
             ),
           ],
           if (message.thinking.isNotEmpty) ...[
@@ -323,15 +261,16 @@ class _AssistantBubbleState extends ConsumerState<_AssistantBubble> {
             MarkdownBody(
               data: message.content,
               styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-                p: const TextStyle(color: Colors.white, fontSize: 15, height: 1.5),
+                p: const TextStyle(color: JarvisColors.ink, fontSize: 15, height: 1.5),
                 code: const TextStyle(
-                  color: Color(0xFF80FFEA),
-                  backgroundColor: Color(0xFF0B1020),
-                  fontFamily: 'monospace',
+                  color: JarvisColors.cyan,
+                  backgroundColor: JarvisColors.void_,
+                  fontFamily: JarvisType.mono,
+                  fontSize: 13.5,
                 ),
                 codeblockDecoration: BoxDecoration(
-                  color: const Color(0xFF0B1020),
-                  borderRadius: BorderRadius.circular(8),
+                  color: JarvisColors.void_,
+                  borderRadius: BorderRadius.circular(6),
                 ),
               ),
               selectable: true,
@@ -356,13 +295,13 @@ class _AssistantBubbleState extends ConsumerState<_AssistantBubble> {
                       padding: const EdgeInsets.only(right: 8),
                       child: Text(
                         message.model!,
-                        style: const TextStyle(color: Colors.white24, fontSize: 10.5, fontStyle: FontStyle.italic),
+                        style: const TextStyle(color: JarvisColors.inkFaint, fontFamily: JarvisType.mono, fontSize: 10.5),
                       ),
                     ),
                   IconButton(
                     constraints: const BoxConstraints(),
                     padding: EdgeInsets.zero,
-                    icon: const Icon(Icons.volume_up_outlined, size: 18, color: Colors.white38),
+                    icon: const Icon(Icons.volume_up_outlined, size: 18, color: JarvisColors.inkFaint),
                     tooltip: 'Read aloud',
                     onPressed: () => ref
                         .read(chatControllerProvider.notifier)
@@ -416,11 +355,11 @@ class _ToolCardState extends ConsumerState<_ToolCard> {
         .join(', ');
 
     final (icon, color) = switch (step.status) {
-      ToolStepStatus.running => (Icons.build, const Color(0xFF00E5FF)),
-      ToolStepStatus.awaitingApproval => (Icons.lock_outline, const Color(0xFFFFB74D)),
-      ToolStepStatus.done => (Icons.check_circle_outline, const Color(0xFF7CF29D)),
-      ToolStepStatus.denied => (Icons.block, const Color(0xFFEF9A9A)),
-      ToolStepStatus.failed => (Icons.error_outline, const Color(0xFFFF8A80)),
+      ToolStepStatus.running => (Icons.build, JarvisColors.cyan),
+      ToolStepStatus.awaitingApproval => (Icons.lock_outline, JarvisColors.amber),
+      ToolStepStatus.done => (Icons.check_circle_outline, JarvisColors.signal),
+      ToolStepStatus.denied => (Icons.block, JarvisColors.inkMuted),
+      ToolStepStatus.failed => (Icons.error_outline, JarvisColors.danger),
     };
 
     final statusLabel = switch (step.status) {
@@ -431,114 +370,112 @@ class _ToolCardState extends ConsumerState<_ToolCard> {
       ToolStepStatus.failed => 'failed',
     };
 
-    return Container(
-      width: double.infinity,
+    return HudPanel(
+      color: JarvisColors.void_,
+      accentColor: step.status == ToolStepStatus.awaitingApproval ? JarvisColors.amber : null,
       padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0B1020),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: step.status == ToolStepStatus.awaitingApproval ? const Color(0xFFFFB74D) : Colors.white12,
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Icon(icon, size: 16, color: color),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  step.name,
-                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (step.isDeviceTool) ...[
-                const SizedBox(width: 6),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E3A5F),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.smartphone, size: 11, color: Color(0xFF80D8FF)),
-                      SizedBox(width: 3),
-                      Text('device', style: TextStyle(color: Color(0xFF80D8FF), fontSize: 9.5)),
-                    ],
-                  ),
-                ),
-              ],
-              if (step.status == ToolStepStatus.running)
-                SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(strokeWidth: 1.6, color: color),
-                ),
-              if (step.status != ToolStepStatus.running)
-                Text(statusLabel, style: TextStyle(color: color, fontSize: 11)),
-            ],
-          ),
-          if (params.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            step.requiresApproval
-                ? SelectableText(
-                    params,
-                    style: const TextStyle(color: Colors.white54, fontFamily: 'monospace', fontSize: 11.5),
-                  )
-                : Text(params, style: const TextStyle(color: Colors.white38, fontSize: 11), overflow: TextOverflow.ellipsis),
-          ],
-          if (step.error != null) ...[
-            const SizedBox(height: 6),
-            Text(step.error!, style: const TextStyle(color: Color(0xFFFF8A80), fontSize: 12)),
-          ],
-          if (step.result != null && step.result!.isNotEmpty) ...[
-            const SizedBox(height: 6),
-            GestureDetector(
-              onTap: () => setState(() => _expanded = !_expanded),
-              child: Text(
-                _expanded ? step.result! : '${step.result!.substring(0, step.result!.length > 140 ? 140 : step.result!.length)}${step.result!.length > 140 ? '… (view)' : ''}',
-                style: const TextStyle(color: Colors.white54, fontFamily: 'monospace', fontSize: 11),
-              ),
-            ),
-          ],
-          if (step.requiresApproval && step.status == ToolStepStatus.awaitingApproval) ...[
-            const SizedBox(height: 8),
+      bevel: 6,
+      child: SizedBox(
+        width: double.infinity,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             Row(
               children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => ref.read(chatControllerProvider.notifier).denyTool(step.callId),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFFEF9A9A),
-                      side: const BorderSide(color: Color(0xFFEF9A9A)),
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                    ),
-                    icon: const Icon(Icons.block, size: 14),
-                    label: const Text('Deny', style: TextStyle(fontSize: 12)),
-                  ),
-                ),
+                Icon(icon, size: 16, color: color),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: FilledButton.icon(
-                    onPressed: () => ref.read(chatControllerProvider.notifier).approveTool(step.callId),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF7CF29D),
-                      foregroundColor: const Color(0xFF002B12),
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                    ),
-                    icon: const Icon(Icons.check, size: 14),
-                    label: const Text('Allow', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  child: Text(
+                    step.name,
+                    style: const TextStyle(color: JarvisColors.ink, fontSize: 13, fontWeight: FontWeight.w600),
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                if (step.isDeviceTool) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: JarvisColors.cyanDim.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.smartphone, size: 11, color: JarvisColors.cyan),
+                        SizedBox(width: 3),
+                        Text('device', style: TextStyle(color: JarvisColors.cyan, fontFamily: JarvisType.mono, fontSize: 9.5)),
+                      ],
+                    ),
+                  ),
+                ],
+                if (step.status == ToolStepStatus.running)
+                  SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 1.6, color: color),
+                  ),
+                if (step.status != ToolStepStatus.running)
+                  Text(statusLabel, style: TextStyle(color: color, fontFamily: JarvisType.mono, fontSize: 10.5)),
               ],
             ),
+            if (params.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              step.requiresApproval
+                  ? SelectableText(
+                      params,
+                      style: const TextStyle(color: JarvisColors.inkMuted, fontFamily: JarvisType.mono, fontSize: 11.5),
+                    )
+                  : Text(params, style: const TextStyle(color: JarvisColors.inkFaint, fontFamily: JarvisType.mono, fontSize: 11), overflow: TextOverflow.ellipsis),
+            ],
+            if (step.error != null) ...[
+              const SizedBox(height: 6),
+              Text(step.error!, style: const TextStyle(color: JarvisColors.danger, fontSize: 12)),
+            ],
+            if (step.result != null && step.result!.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              GestureDetector(
+                onTap: () => setState(() => _expanded = !_expanded),
+                child: Text(
+                  _expanded ? step.result! : '${step.result!.substring(0, step.result!.length > 140 ? 140 : step.result!.length)}${step.result!.length > 140 ? '… (view)' : ''}',
+                  style: const TextStyle(color: JarvisColors.inkMuted, fontFamily: JarvisType.mono, fontSize: 11),
+                ),
+              ),
+            ],
+            if (step.requiresApproval && step.status == ToolStepStatus.awaitingApproval) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => ref.read(chatControllerProvider.notifier).denyTool(step.callId),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: JarvisColors.danger,
+                        side: const BorderSide(color: JarvisColors.danger),
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                      ),
+                      icon: const Icon(Icons.block, size: 14),
+                      label: const Text('Deny', style: TextStyle(fontSize: 12)),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () => ref.read(chatControllerProvider.notifier).approveTool(step.callId),
+                      style: FilledButton.styleFrom(
+                        backgroundColor: JarvisColors.signal,
+                        foregroundColor: JarvisColors.void_,
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                      ),
+                      icon: const Icon(Icons.check, size: 14),
+                      label: const Text('Allow', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
@@ -558,16 +495,16 @@ class _StatusChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final label = switch (status) {
-      ChatStatus.reasoning => 'reasoning…',
-      ChatStatus.toolCalling => 'using tools…',
-      ChatStatus.searching => 'searching…',
-      ChatStatus.generating => 'generating…',
-      ChatStatus.thinking => 'thinking…',
-      _ => streaming ? '…' : null,
+      ChatStatus.reasoning => 'reasoning',
+      ChatStatus.toolCalling => 'using tools',
+      ChatStatus.searching => 'searching',
+      ChatStatus.generating => 'generating',
+      ChatStatus.thinking => 'thinking',
+      _ => streaming ? 'working' : null,
     };
     if (label == null) return const SizedBox.shrink();
 
-    final color = status == ChatStatus.reasoning ? const Color(0xFFFFB74D) : const Color(0xFF00E5FF);
+    final color = status == ChatStatus.reasoning ? JarvisColors.amber : JarvisColors.cyan;
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -578,7 +515,7 @@ class _StatusChip extends StatelessWidget {
           child: CircularProgressIndicator(strokeWidth: 1.6, color: color),
         ),
         const SizedBox(width: 6),
-        Text(label, style: TextStyle(color: color, fontSize: 12, fontStyle: FontStyle.italic)),
+        Text(label, style: TextStyle(color: color, fontFamily: JarvisType.mono, fontSize: 11.5)),
       ],
     );
   }
@@ -611,8 +548,8 @@ class _ThinkingDrawerState extends State<_ThinkingDrawer> {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(10),
+        color: Colors.white.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(6),
       ),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
@@ -620,16 +557,12 @@ class _ThinkingDrawerState extends State<_ThinkingDrawer> {
           tilePadding: const EdgeInsets.symmetric(horizontal: 12),
           childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
           onExpansionChanged: (v) => setState(() => _expanded = v),
-          title: Text(
+          title: const Text(
             'Thought process',
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.6),
-              fontSize: 12,
-              fontStyle: FontStyle.italic,
-            ),
+            style: TextStyle(color: JarvisColors.inkMuted, fontSize: 12),
           ),
-          iconColor: Colors.white54,
-          collapsedIconColor: Colors.white54,
+          iconColor: JarvisColors.inkMuted,
+          collapsedIconColor: JarvisColors.inkMuted,
           children: [
             AnimatedOpacity(
               opacity: _expanded ? 1 : 0,
@@ -637,11 +570,11 @@ class _ThinkingDrawerState extends State<_ThinkingDrawer> {
               child: _expanded
                   ? SelectableText(
                       widget.thinking,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.55),
-                        fontSize: 13,
+                      style: const TextStyle(
+                        color: JarvisColors.inkMuted,
+                        fontSize: 12.5,
                         height: 1.4,
-                        fontFamily: 'monospace',
+                        fontFamily: JarvisType.mono,
                       ),
                     )
                   : const SizedBox.shrink(),
@@ -662,17 +595,14 @@ class _ErrorBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     return Align(
       alignment: Alignment.centerLeft,
-      child: Container(
+      child: HudPanel(
         margin: const EdgeInsets.only(bottom: 12, right: 48),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: const Color(0xFF2A0F14),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.redAccent.withValues(alpha: 0.4)),
-        ),
+        color: const Color(0xFF2A1014),
+        borderColor: JarvisColors.danger,
+        bevel: 10,
         child: Text(
           message.errorMessage ?? 'Something went wrong',
-          style: const TextStyle(color: Colors.redAccent, fontSize: 13),
+          style: const TextStyle(color: JarvisColors.danger, fontSize: 13),
         ),
       ),
     );
@@ -688,10 +618,14 @@ class _ErrorBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialBanner(
-      backgroundColor: const Color(0xFF2A0F14),
-      content: Text(message, style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
+      backgroundColor: const Color(0xFF2A1014),
+      content: Text(message, style: const TextStyle(color: JarvisColors.danger, fontSize: 13)),
       actions: [
-        TextButton(onPressed: onDismiss, child: const Text('Dismiss', style: TextStyle(color: Colors.redAccent))),
+        TextButton(
+          onPressed: onDismiss,
+          style: TextButton.styleFrom(foregroundColor: JarvisColors.danger),
+          child: const Text('Dismiss'),
+        ),
       ],
     );
   }
@@ -773,17 +707,10 @@ class _ComposerState extends ConsumerState<_Composer> {
                 maxLines: 5,
                 onChanged: (v) => setState(() => _hasText = v.trim().isNotEmpty),
                 onSubmitted: (_) => _send(),
-                style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  hintText: 'Message Jarvis…',
-                  hintStyle: const TextStyle(color: Colors.white38),
-                  filled: true,
-                  fillColor: const Color(0xFF101830),
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
+                style: const TextStyle(color: JarvisColors.ink),
+                decoration: const InputDecoration(
+                  hintText: 'Message Jarvis',
+                  contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 ),
               ),
             ),
@@ -791,13 +718,13 @@ class _ComposerState extends ConsumerState<_Composer> {
             streaming
                 ? IconButton.filledTonal(
                     onPressed: () => ref.read(chatControllerProvider.notifier).cancel(),
-                    icon: const Icon(Icons.stop, color: Colors.white),
+                    icon: const Icon(Icons.stop),
                     tooltip: 'Stop',
                   )
                 : IconButton.filled(
                     onPressed: _hasText ? _send : null,
-                    icon: const Icon(Icons.arrow_upward, color: Color(0xFF0B1020)),
-                    style: IconButton.styleFrom(backgroundColor: const Color(0xFF00E5FF)),
+                    icon: const Icon(Icons.arrow_upward, color: JarvisColors.void_),
+                    style: IconButton.styleFrom(backgroundColor: JarvisColors.cyan),
                     tooltip: 'Send',
                   ),
           ],
@@ -833,10 +760,10 @@ class _VoiceButton extends ConsumerWidget {
         ? const SizedBox(
             width: 20,
             height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+            child: CircularProgressIndicator(strokeWidth: 2, color: JarvisColors.inkMuted),
           )
         : Icon(listening ? Icons.mic : Icons.mic_none,
-            color: listening ? const Color(0xFFFF5252) : Colors.white54);
+            color: listening ? JarvisColors.danger : JarvisColors.inkMuted);
 
     return Stack(
       alignment: Alignment.center,
@@ -852,7 +779,7 @@ class _VoiceButton extends ConsumerWidget {
                 height: 34,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: const Color(0xFFFF5252).withValues(alpha: 0.10 + level * 0.25),
+                  color: JarvisColors.danger.withValues(alpha: 0.10 + level * 0.25),
                 ),
               ),
             ),
@@ -881,7 +808,7 @@ class _ContinuousVoiceToggle extends ConsumerWidget {
     final active = ref.watch(chatControllerProvider.select((s) => s.continuousVoice));
     return IconButton(
       onPressed: () => ref.read(chatControllerProvider.notifier).setContinuousVoice(!active),
-      icon: Icon(Icons.loop, color: active ? const Color(0xFF00E5FF) : Colors.white38),
+      icon: Icon(Icons.loop, color: active ? JarvisColors.cyan : JarvisColors.inkFaint),
       tooltip: active ? 'Continuous voice mode: on' : 'Continuous voice mode: off',
     );
   }
@@ -914,7 +841,7 @@ class _SpeakingIndicatorState extends ConsumerState<_SpeakingIndicator> with Sin
       opacity: Tween(begin: 0.4, end: 1.0).animate(_controller),
       child: const Padding(
         padding: EdgeInsets.only(right: 4),
-        child: Icon(Icons.graphic_eq, color: Color(0xFF00E5FF), size: 18),
+        child: Icon(Icons.graphic_eq, color: JarvisColors.cyan, size: 18),
       ),
     );
   }

@@ -8,6 +8,7 @@ import '../core/app_config.dart';
 import '../protocol/jarvis_protocol.dart';
 import '../services/automation/system_assistant_service.dart';
 import '../services/ws/connection_controller.dart';
+import 'theme/jarvis_theme.dart';
 
 class SettingsSheet extends ConsumerStatefulWidget {
   const SettingsSheet({super.key});
@@ -121,19 +122,19 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          backgroundColor: const Color(0xFF101830),
+          backgroundColor: JarvisColors.panel,
           title: const Text('Enable full autonomous mode?'),
           content: const Text(
             'Jarvis will run every tool it decides to use — including shell commands, '
             'file writes/deletes, and device actions — without asking you first. '
             'Only enable this if you trust it completely.',
-            style: TextStyle(fontSize: 13),
+            style: TextStyle(fontSize: 13, color: JarvisColors.inkMuted),
           ),
           actions: [
             TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancel')),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(true),
-              style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+              style: FilledButton.styleFrom(backgroundColor: JarvisColors.danger),
               child: const Text('Enable'),
             ),
           ],
@@ -160,43 +161,43 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
+          const Text(
             'Settings',
-            style: Theme.of(context).textTheme.titleLarge!.copyWith(fontWeight: FontWeight.bold),
+            style: TextStyle(fontFamily: JarvisType.display, fontSize: 20, fontWeight: FontWeight.w600, color: JarvisColors.ink),
           ),
           const SizedBox(height: 4),
-          Text(
-            'Server: ${connection.status.name}',
-            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          HudReadout(
+            label: connection.status.name.toUpperCase(),
+            color: connection.status == ConnectionStatus.connected ? JarvisColors.signal : JarvisColors.inkMuted,
           ),
           const SizedBox(height: 16),
           TextField(
             controller: _hostController,
+            style: const TextStyle(color: JarvisColors.ink, fontFamily: JarvisType.mono, fontSize: 14),
             decoration: const InputDecoration(
               labelText: 'Server',
               hintText: '192.168.1.2:3000',
               prefixIcon: Icon(Icons.dns_outlined),
-              border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _keyController,
             obscureText: true,
+            style: const TextStyle(color: JarvisColors.ink, fontFamily: JarvisType.mono, fontSize: 14),
             decoration: const InputDecoration(
               labelText: 'API key',
               prefixIcon: Icon(Icons.key_outlined),
-              border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _modelController,
+            style: const TextStyle(color: JarvisColors.ink),
             decoration: const InputDecoration(
               labelText: 'Model override (blank = auto)',
               hintText: 'e.g. llama3.2',
               prefixIcon: Icon(Icons.auto_awesome_outlined),
-              border: OutlineInputBorder(),
             ),
           ),
           if (_availableModels.isNotEmpty) ...[
@@ -207,9 +208,10 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
               children: [
                 for (final name in _availableModels)
                   ActionChip(
-                    label: Text(name, style: const TextStyle(fontSize: 12)),
-                    backgroundColor: const Color(0xFF101830),
-                    side: const BorderSide(color: Colors.white12),
+                    label: Text(name, style: const TextStyle(fontFamily: JarvisType.mono, fontSize: 12, color: JarvisColors.ink)),
+                    backgroundColor: JarvisColors.panel,
+                    side: const BorderSide(color: JarvisColors.hairline),
+                    shape: const BeveledRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(4))),
                     onPressed: () => setState(() => _modelController.text = name),
                   ),
               ],
@@ -218,20 +220,20 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
           const SizedBox(height: 12),
           TextField(
             controller: _nameController,
+            style: const TextStyle(color: JarvisColors.ink),
             decoration: const InputDecoration(
               labelText: 'Device name',
               hintText: 'e.g. Phone, Laptop',
               prefixIcon: Icon(Icons.smartphone),
-              border: OutlineInputBorder(),
             ),
           ),
           const SizedBox(height: 12),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Voice replies', style: TextStyle(fontSize: 14)),
+            title: const Text('Voice replies', style: TextStyle(fontSize: 14, color: JarvisColors.ink)),
             subtitle: const Text(
               'Speak responses aloud when you talk to Jarvis',
-              style: TextStyle(fontSize: 12, color: Colors.white54),
+              style: TextStyle(fontSize: 12, color: JarvisColors.inkMuted),
             ),
             value: ref.watch(settingsControllerProvider).voiceReplies,
             onChanged: (value) => ref.read(settingsControllerProvider.notifier).save(voiceReplies: value),
@@ -239,10 +241,10 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
           const SizedBox(height: 4),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('"Hey Jarvis" wake word', style: TextStyle(fontSize: 14)),
+            title: const Text('"Hey Jarvis" wake word', style: TextStyle(fontSize: 14, color: JarvisColors.ink)),
             subtitle: const Text(
               'Always listen for "Jarvis" on this device and start voice input automatically',
-              style: TextStyle(fontSize: 12, color: Colors.white54),
+              style: TextStyle(fontSize: 12, color: JarvisColors.inkMuted),
             ),
             value: ref.watch(settingsControllerProvider).wakeWordEnabled,
             onChanged: connection.status == ConnectionStatus.connected
@@ -255,14 +257,14 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
           const SizedBox(height: 4),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Full autonomous mode', style: TextStyle(fontSize: 14)),
+            title: const Text('Full autonomous mode', style: TextStyle(fontSize: 14, color: JarvisColors.ink)),
             subtitle: Text(
               autoApprove
                   ? 'Jarvis runs every tool automatically — nothing needs approval'
                   : 'Jarvis asks before risky actions (shell, file writes, device control)',
-              style: TextStyle(fontSize: 12, color: autoApprove ? Colors.redAccent : Colors.white54),
+              style: TextStyle(fontSize: 12, color: autoApprove ? JarvisColors.danger : JarvisColors.inkMuted),
             ),
-            activeThumbColor: Colors.redAccent,
+            activeThumbColor: JarvisColors.danger,
             value: autoApprove,
             onChanged: connection.status == ConnectionStatus.connected ? _setAutoApprove : null,
           ),
@@ -272,14 +274,14 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
               contentPadding: EdgeInsets.zero,
               leading: Icon(
                 _isDefaultAssistant ? Icons.check_circle : Icons.assistant_outlined,
-                color: _isDefaultAssistant ? Colors.greenAccent : Colors.white54,
+                color: _isDefaultAssistant ? JarvisColors.signal : JarvisColors.inkMuted,
               ),
-              title: const Text('System assistant', style: TextStyle(fontSize: 14)),
+              title: const Text('System assistant', style: TextStyle(fontSize: 14, color: JarvisColors.ink)),
               subtitle: Text(
                 _isDefaultAssistant
                     ? 'Jarvis opens on long-press-home / the assist gesture'
                     : 'Set Jarvis as the default digital assistant app',
-                style: const TextStyle(fontSize: 12, color: Colors.white54),
+                style: const TextStyle(fontSize: 12, color: JarvisColors.inkMuted),
               ),
               trailing: _isDefaultAssistant
                   ? null
@@ -287,13 +289,12 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
             ),
           ],
           const SizedBox(height: 20),
-          FilledButton.icon(
-            onPressed: _saveAndMaybeReconnect,
-            icon: const Icon(Icons.check),
-            label: const Text('Save'),
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              backgroundColor: const Color(0xFF00B8D4),
+          SizedBox(
+            height: 50,
+            child: FilledButton.icon(
+              onPressed: _saveAndMaybeReconnect,
+              icon: const Icon(Icons.check),
+              label: const Text('Save'),
             ),
           ),
           const SizedBox(height: 8),
