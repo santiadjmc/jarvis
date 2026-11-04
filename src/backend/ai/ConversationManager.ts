@@ -227,9 +227,9 @@ class ConversationManager {
         };
 
         const messages = conv.messages[0]?.role === "system" ? [conv.messages[0]] : [];
-        conv.messages = [...messages, ...keepTail, summaryMessage];
+        conv.messages = [...messages, summaryMessage, ...keepTail];
         conv.updatedAt = Date.now();
-        this.compactedAt.set(conversationId, previousLength + 1);
+        this.compactedAt.set(conversationId, conv.messages.length);
 
         Log.info("Conversation compacted", {
             conversationId,
