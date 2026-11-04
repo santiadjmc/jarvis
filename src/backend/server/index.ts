@@ -22,8 +22,21 @@ class Server {
     }
 
     private setupMiddleware(): void {
+        const configuredOrigins = (process.env.CORS_ORIGINS || "")
+            .split(",")
+            .map(origin => origin.trim())
+            .filter(Boolean);
+
         this.app.use(cors({
-            origin: process.env.CORS_ORIGINS?.split(",") || ["http://localhost:*"],
+            origin: (origin, callback) => {
+                if (!origin) return callback(null, true);
+                if (configuredOrigins.includes("*")) return callback(null, true);
+                if (configuredOrigins.length > 0) {
+                    return callback(null, configuredOrigins.includes(origin));
+                }
+                const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin);
+                return callback(null, isLocal);
+            },
             methods: ["GET", "POST", "PUT", "DELETE"],
             allowedHeaders: ["Content-Type", "Authorization"],
         }));

@@ -23,6 +23,10 @@ function headerValue(headers: Array<{ name?: string | null; value?: string | nul
     return headers?.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value || "";
 }
 
+function sanitizeHeader(value: string): string {
+    return value.replace(/[\r\n]+/g, " ").trim();
+}
+
 const gmailListMessages: ToolSpec = {
     name: "gmail_list_messages",
     description: "List recent Gmail messages, optionally filtered by a Gmail search query (e.g. 'is:unread', 'from:boss@company.com', 'subject:invoice').",
@@ -117,9 +121,12 @@ const gmailSend: ToolSpec = {
     },
     async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
         const to = typeof params.to === "string" ? params.to.trim() : "";
-        const subject = typeof params.subject === "string" ? params.subject : "";
+        const subject = sanitizeHeader(typeof params.subject === "string" ? params.subject : "");
         const body = typeof params.body === "string" ? params.body : "";
         if (!to) return { success: false, data: null, error: "to is required" };
+        if (/[\r\n]/.test(to) || !/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(to)) {
+            return { success: false, data: null, error: "to must be a single valid email address" };
+        }
         try {
             const auth = await getGoogleClient();
             const gmail = google.gmail({ version: "v1", auth });
