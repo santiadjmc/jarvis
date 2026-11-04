@@ -37,7 +37,7 @@ src/app/android/**/key.properties
 ## IDE and OS files
 .idea/
 *.iml
-.vscode/*.code-snippets
+.vscode/
 .DS_Store
 Thumbs.db
 
