@@ -27,7 +27,7 @@ dependencies:
   just_audio_media_kit: ^2.1.0
   media_kit_libs_linux: ^1.2.1
   flutter_foreground_task: ^11.0.3
-  flutter_local_notifications: ^22.3.1
+  flutter_local_notifications: ^22.3.3
   battery_plus: ^7.1.2
   geolocator: ^14.1.1
   flutter_contacts: ^2.6.0
