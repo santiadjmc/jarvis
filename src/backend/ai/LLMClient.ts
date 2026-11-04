@@ -291,6 +291,7 @@ class LLMClient {
         if (options.options?.num_predict !== undefined) body.max_tokens = options.options.num_predict;
         if (options.options?.stop !== undefined) body.stop = options.options.stop;
         if (options.options?.seed !== undefined) body.seed = options.options.seed;
+        if (options.keepAlive !== undefined && this.ollamaNative === true) body.keep_alive = options.keepAlive;
         return body;
     }
 

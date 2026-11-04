@@ -69,14 +69,7 @@ class ToolRegistry {
 
     list(): string[] {
         this.init();
-        const list = Array.from(this.specs.keys()).filter(name => this.advertised(name));
-        const raw = (process.env.JARVIS_TOOLS || "*").trim();
-        if (raw !== "*" && raw.toLowerCase() !== "none") {
-            for (const wanted of raw.split(",").map(s => s.trim())) {
-                if (wanted && !wanted.startsWith("-") && !list.includes(wanted)) list.push(wanted);
-            }
-        }
-        return list.sort();
+        return Array.from(this.specs.keys()).filter(name => this.advertised(name)).sort();
     }
 
     get(name: string): ToolSpec | undefined {
@@ -110,7 +103,8 @@ class ToolRegistry {
     defsForOllama(opts: { safeOnly?: boolean } = {}): OllamaTool[] {
         this.init();
         return this.list()
-            .map(name => this.get(name)!)
+            .map(name => this.get(name))
+            .filter((spec): spec is ToolSpec => !!spec)
             .filter(spec => !opts.safeOnly || (!spec.requiresApproval && spec.runtime !== "device"))
             .map(spec => ({
                 type: "function" as const,

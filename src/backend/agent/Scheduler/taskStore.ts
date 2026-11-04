@@ -1,6 +1,6 @@
 import { v4 as uuid } from "uuid";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import { homedir } from "os";
 import Log from "../../Log";
 
@@ -37,7 +37,7 @@ function load(): TaskFile {
 
 function save(data: TaskFile): void {
     const path = storePath();
-    mkdirSync(path.substring(0, path.lastIndexOf("/")) || ".", { recursive: true });
+    mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(data, null, 2));
 }
 

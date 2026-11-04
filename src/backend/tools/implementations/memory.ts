@@ -87,7 +87,7 @@ const forget: ToolSpec = {
     async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
         const id = typeof params.id === "string" ? params.id : "";
         if (!id) return { success: false, data: null, error: "id is required" };
-        const removed = deleteMemory(id);
+        const removed = await deleteMemory(id);
         return removed
             ? { success: true, data: { id, forgotten: true } }
             : { success: false, data: null, error: `No memory entry with id ${id}` };

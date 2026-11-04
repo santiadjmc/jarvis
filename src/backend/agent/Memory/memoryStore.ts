@@ -1,6 +1,6 @@
 import { v4 as uuid } from "uuid";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import { homedir } from "os";
 import llmClient from "../../ai/LLMClient";
 import Log from "../../Log";
@@ -19,6 +19,14 @@ interface MemoryFile {
 
 const MAX_ENTRIES = 2000;
 
+let writeChain: Promise<unknown> = Promise.resolve();
+
+function withWriteLock<T>(fn: () => Promise<T> | T): Promise<T> {
+    const result = writeChain.then(fn, fn);
+    writeChain = result.catch(() => undefined);
+    return result;
+}
+
 function storePath(): string {
     const root = process.env.JARVIS_DATA_DIR || join(homedir(), ".local", "share", "jarvis");
     return join(root, "memory.json");
@@ -36,7 +44,7 @@ function load(): MemoryFile {
 
 function save(data: MemoryFile): void {
     const path = storePath();
-    mkdirSync(path.substring(0, path.lastIndexOf("/")) || ".", { recursive: true });
+    mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(data, null, 2));
 }
 
@@ -61,15 +69,17 @@ function cosine(a: number[], b: number[]): number {
 }
 
 export async function addMemory(content: string, type: "fact" | "note" = "fact"): Promise<string> {
-    const data = load();
     const embedding = (await embed(content)) || undefined;
-    const entry: MemoryEntry = { id: uuid(), content, type, embedding, createdAt: Date.now() };
-    data.entries.push(entry);
-    if (data.entries.length > MAX_ENTRIES) {
-        data.entries = data.entries.slice(-MAX_ENTRIES);
-    }
-    save(data);
-    return entry.id;
+    return withWriteLock(() => {
+        const data = load();
+        const entry: MemoryEntry = { id: uuid(), content, type, embedding, createdAt: Date.now() };
+        data.entries.push(entry);
+        if (data.entries.length > MAX_ENTRIES) {
+            data.entries = data.entries.slice(-MAX_ENTRIES);
+        }
+        save(data);
+        return entry.id;
+    });
 }
 
 export async function searchMemory(query: string, k = 5, minScore = 0.35): Promise<Array<{ content: string; score: number; createdAt: number }>> {
@@ -106,11 +116,13 @@ export function listMemories(limit = 50): Array<{ id: string; content: string; t
         .map(e => ({ id: e.id, content: e.content, type: e.type, createdAt: e.createdAt }));
 }
 
-export function deleteMemory(id: string): boolean {
-    const data = load();
-    const before = data.entries.length;
-    data.entries = data.entries.filter(e => e.id !== id);
-    if (data.entries.length === before) return false;
-    save(data);
-    return true;
+export function deleteMemory(id: string): Promise<boolean> {
+    return withWriteLock(() => {
+        const data = load();
+        const before = data.entries.length;
+        data.entries = data.entries.filter(e => e.id !== id);
+        if (data.entries.length === before) return false;
+        save(data);
+        return true;
+    });
 }
