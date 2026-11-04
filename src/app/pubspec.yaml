@@ -31,7 +31,7 @@ dependencies:
   battery_plus: ^7.1.2
   geolocator: ^14.1.1
   flutter_contacts: ^2.6.0
-  installed_apps: ^2.2.0
+  installed_apps: ^2.2.1
   telephony_sms: ^0.1.0
   flutter_phone_dialer: ^0.1.0
 
