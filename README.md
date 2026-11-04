@@ -187,3 +187,7 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before openin
 Jarvis is licensed under the **GNU Affero General Public License v3.0 only** (`AGPL-3.0-only`). See [LICENSE](LICENSE).
 
 If you run a modified version of Jarvis as a network service, the AGPL requires you to make the corresponding source available to users of that service.
+
+---
+
+<p align="center">Created with ❤️ by <a href="https://github.com/santiadjmc">Santiago Morales</a></p>
