@@ -115,8 +115,6 @@ ThemeData buildJarvisTheme() {
   );
 }
 
-/// A panel shape with bevelled corners — the structural signature of Jarvis's
-/// HUD language, used instead of Material's uniform rounded-rect everywhere.
 class HudPanel extends StatelessWidget {
   const HudPanel({
     super.key,
@@ -153,10 +151,6 @@ class HudPanel extends StatelessWidget {
   }
 }
 
-/// The reactor-core mark: Jarvis's one recurring, animated brand element.
-/// Used at small sizes as an "alive" indicator (app bar) and large as the
-/// focal mark on setup/empty states. Deliberately the only glowing element
-/// in the interface — everything else stays quiet by comparison.
 class ReactorCore extends StatefulWidget {
   const ReactorCore({
     super.key,
@@ -223,7 +217,6 @@ class _ReactorCoreState extends State<ReactorCore> with SingleTickerProviderStat
   }
 }
 
-/// A status dot + monospace label, for connection/latency/telemetry readouts.
 class HudReadout extends StatelessWidget {
   const HudReadout({super.key, required this.label, this.color = JarvisColors.inkMuted, this.dot = true});
 
