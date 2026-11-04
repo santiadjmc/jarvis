@@ -1,18 +1,39 @@
 {
   "name": "jarvis",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Jarvis - a local-first, self-hosted AI assistant with a Flutter client and a TypeScript server.",
+  "private": true,
   "scripts": {
     "test": "tsx --test src/backend/tests/*.test.ts",
+    "test:app": "cd src/app && flutter test",
+    "analyze:app": "cd src/app && flutter analyze",
     "start": "tsx src/backend/index.ts",
     "dev": "tsx watch src/backend/index.ts",
     "start:managed": "tsx src/backend/ProcessManager.ts",
     "typecheck": "tsc --noEmit"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "ai",
+    "assistant",
+    "local-first",
+    "self-hosted",
+    "ollama",
+    "flutter",
+    "typescript"
+  ],
+  "author": "Jarvis contributors",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/santiadjmc/jarvis.git"
+  },
+  "bugs": {
+    "url": "https://github.com/santiadjmc/jarvis/issues"
+  },
+  "homepage": "https://github.com/santiadjmc/jarvis#readme",
+  "engines": {
+    "node": ">=20"
+  },
   "type": "commonjs",
   "dependencies": {
     "chalk": "^4.1.2",
