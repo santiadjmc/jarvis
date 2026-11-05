@@ -14,6 +14,31 @@ import Log from "../../Log";
 class JarvisWebSocketServer {
     private wss: WSServer | null = null;
     private readonly MAX_PAYLOAD = 4 * 1024 * 1024;
+    private readonly MAX_AUTH_FAILURES = 10;
+    private readonly AUTH_FAILURE_WINDOW_MS = 60000;
+    private authFailures = new Map<string, { count: number; resetAt: number }>();
+
+    private originAllowed(origin: string): boolean {
+        const configured = (process.env.CORS_ORIGINS || "")
+            .split(",")
+            .map(o => o.trim())
+            .filter(Boolean);
+        if (configured.includes("*")) return true;
+        if (configured.includes(origin)) return true;
+        return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin);
+    }
+
+    private registerAuthFailure(ip: string): boolean {
+        const now = Date.now();
+        const entry = this.authFailures.get(ip);
+        if (entry && now < entry.resetAt) {
+            entry.count++;
+            if (entry.count > this.MAX_AUTH_FAILURES) return false;
+        } else {
+            this.authFailures.set(ip, { count: 1, resetAt: now + this.AUTH_FAILURE_WINDOW_MS });
+        }
+        return true;
+    }
 
     attach(server: Server): void {
         this.wss = new WSServer({
@@ -28,19 +53,34 @@ class JarvisWebSocketServer {
     }
 
     private handleConnection(ws: WebSocket, req: IncomingMessage): void {
+        const remoteAddress = req.socket.remoteAddress || "unknown";
+
+        const origin = req.headers.origin;
+        if (origin && !this.originAllowed(origin)) {
+            Log.warn("WS rejected: origin not allowed", { remoteAddress, origin });
+            ws.close(4003, "Origin not allowed");
+            return;
+        }
+
         const apiKey = this.extractApiKey(req);
         if (!apiKey) {
-            Log.warn("WS rejected: missing API key", { remoteAddress: req.socket.remoteAddress });
+            Log.warn("WS rejected: missing API key", { remoteAddress });
             ws.close(4001, "Missing API key");
             return;
         }
 
         const authResult = authService.validateApiKey(apiKey);
         if (!authResult.success) {
-            Log.warn("WS rejected: invalid API key", { remoteAddress: req.socket.remoteAddress, reason: authResult.error });
+            Log.warn("WS rejected: invalid API key", { remoteAddress, reason: authResult.error });
+            if (!this.registerAuthFailure(remoteAddress)) {
+                Log.warn("WS rejected: too many failed auth attempts", { remoteAddress });
+                ws.close(4002, "Too many failed attempts, slow down");
+                return;
+            }
             ws.close(4003, authResult.error || "Invalid API key");
             return;
         }
+        this.authFailures.delete(remoteAddress);
 
         const clientId = uuid();
         const client: AuthenticatedClient = {

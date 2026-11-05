@@ -1,7 +1,12 @@
 const WebSocket = require("ws");
 const fs = require("fs");
 
-const [, , host, key, prompt] = process.argv;
+const [, , host, prompt] = process.argv;
+const key = process.env.JARVIS_API_KEY;
+if (!key) {
+    console.error("Missing API key: set the JARVIS_API_KEY environment variable (usage: node tool/e2e_tts.js <host> <prompt>)");
+    process.exit(2);
+}
 const url = `ws://${host}/ws?key=${encodeURIComponent(key)}`;
 
 const ws = new WebSocket(url);

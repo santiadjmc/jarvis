@@ -5,6 +5,7 @@ type Acceptor = (action: "approve" | "deny") => void;
 interface PendingApproval {
     resolve: Acceptor;
     timer: NodeJS.Timeout;
+    ownerId: string;
     signal?: AbortSignal;
     onAbort: () => void;
 }
@@ -18,7 +19,7 @@ class ApprovalBroker {
         return `${callId}:${requestId}`;
     }
 
-    wait(requestId: string, callId: string, timeoutMs: number, signal?: AbortSignal): Promise<ApprovalResult> {
+    wait(requestId: string, callId: string, timeoutMs: number, signal?: AbortSignal, ownerId = ""): Promise<ApprovalResult> {
         const existing = this.pending.get(this.key(requestId, callId));
         if (existing) return Promise.resolve("timeout");
 
@@ -46,6 +47,7 @@ class ApprovalBroker {
                     resolve(action);
                 },
                 timer,
+                ownerId,
                 signal,
                 onAbort,
             });
@@ -56,9 +58,13 @@ class ApprovalBroker {
         });
     }
 
-    resolve(requestId: string, callId: string, action: "approve" | "deny"): boolean {
+    resolve(requestId: string, callId: string, action: "approve" | "deny", clientId?: string): boolean {
         const entry = this.pending.get(this.key(requestId, callId));
         if (!entry) return false;
+        if (clientId !== undefined && entry.ownerId !== clientId) {
+            Log.warn("Rejected approval from a client that does not own the request", { requestId, callId, clientId });
+            return false;
+        }
         entry.resolve(action);
         return true;
     }
