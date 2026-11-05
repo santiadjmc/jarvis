@@ -31,7 +31,6 @@ class AuthService {
         if (this.hasHash(keyHash)) return null;
         const apiKey: ApiKey = {
             id,
-            key: input.key,
             keyHash,
             name: input.name,
             role: input.role,
@@ -70,36 +69,33 @@ class AuthService {
             revoked: false,
         };
 
-        this.apiKeys.set(id, apiKey);
+        this.apiKeys.set(id, { ...apiKey, key: undefined });
         Log.info("API key generated", { keyId: id, name, role });
         return apiKey;
     }
 
     validateApiKey(key: string): AuthResult {
         const keyHash = this.hashKey(key);
+        let matched: ApiKey | null = null;
 
         for (const apiKey of this.apiKeys.values()) {
-            if (this.hashesEqual(apiKey.keyHash, keyHash)) {
-                if (apiKey.revoked) {
-                    return { success: false, error: "API key has been revoked" };
-                }
-                if (apiKey.expiresAt && Date.now() > apiKey.expiresAt) {
-                    return { success: false, error: "API key has expired" };
-                }
-
-                apiKey.lastUsedAt = Date.now();
-
-                return {
-                    success: true,
-                    clientId: key,
-                    apiKeyId: apiKey.id,
-                    role: apiKey.role,
-                    permissions: apiKey.permissions,
-                };
-            }
+            if (this.hashesEqual(apiKey.keyHash, keyHash)) matched = apiKey;
         }
 
-        return { success: false, error: "Invalid API key" };
+        if (!matched) return { success: false, error: "Invalid API key" };
+        if (matched.revoked) return { success: false, error: "API key has been revoked" };
+        if (matched.expiresAt && Date.now() > matched.expiresAt) {
+            return { success: false, error: "API key has expired" };
+        }
+
+        matched.lastUsedAt = Date.now();
+
+        return {
+            success: true,
+            apiKeyId: matched.id,
+            role: matched.role,
+            permissions: matched.permissions,
+        };
     }
 
     revokeKey(keyId: string): boolean {

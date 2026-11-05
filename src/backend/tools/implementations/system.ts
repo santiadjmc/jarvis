@@ -7,6 +7,25 @@ import deviceRegistry from "../../server/ws/DeviceRegistry";
 
 const execFileAsync = promisify(execFile);
 
+function offsetMinutesForZone(date: Date, timeZone: string): number {
+    const dtf = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        hourCycle: "h23",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+    });
+    const map: Record<string, number> = {};
+    for (const part of dtf.formatToParts(date)) {
+        if (part.type !== "literal") map[part.type] = Number(part.value);
+    }
+    const asUTC = Date.UTC(map.year, map.month - 1, map.day, map.hour, map.minute, map.second);
+    return Math.round((asUTC - date.getTime()) / 60000);
+}
+
 function serverTimezone(): string {
     if (process.env.TZ) return process.env.TZ;
     try {
@@ -73,7 +92,7 @@ const getTime: ToolSpec = {
         const tz = typeof params.timezone === "string" && params.timezone ? params.timezone : defaultTz;
         try {
             const d = new Date();
-            const offsetMinutes = -d.getTimezoneOffset();
+            const offsetMinutes = tz === defaultTz ? -d.getTimezoneOffset() : offsetMinutesForZone(d, tz);
             const offset = `${offsetMinutes >= 0 ? "+" : "-"}${String(Math.floor(Math.abs(offsetMinutes) / 60)).padStart(2, "0")}:${String(Math.abs(offsetMinutes) % 60).padStart(2, "0")}`;
             return {
                 success: true,

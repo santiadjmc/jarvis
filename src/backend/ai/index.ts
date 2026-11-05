@@ -90,8 +90,10 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             this.sendStatus(client.id, "thinking", streamId);
             await this.runAgent(client, conversation.id, model, keepAlive, route.tier, streamId, abort);
         } else {
+            const abort = new AbortController();
+            streamManager.create(client.id, conversation.id, model, abort, requestId);
             this.sendStatus(client.id, "thinking", requestId);
-            await this.generateResponse(client, conversation.id, requestId, model, keepAlive);
+            await this.generateResponse(client, conversation.id, requestId, model, keepAlive, abort);
         }
     }
 
@@ -236,7 +238,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             Log.error("Agent stream error", err);
             if (model !== modelManager.getActive()) {
                 const fallback = modelManager.getFallback();
-                if (fallback) {
+                if (fallback && fallback !== model) {
                     Log.info("Retrying with fallback model", { fallback, original: model });
                     return this.runAgent(client, conversationId, fallback, -1, tier, streamId, abortController);
                 }
@@ -422,13 +424,6 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         connectionManager.send(client.id, JSON.stringify(payload));
         if (targetConnection !== client.id) {
             connectionManager.send(targetConnection, JSON.stringify(payload));
-            connectionManager.send(targetConnection, JSON.stringify({
-                type: "stream_end",
-                id: uuid(),
-                requestId,
-                fullResponse: "",
-                model: "",
-            }));
         }
 
         conversationManager.addMessage(conversationId, {
@@ -484,14 +479,16 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         });
     }
 
-    private async generateResponse(client: AuthenticatedClient, conversationId: string, requestId: string, model: string, keepAlive: number): Promise<void> {
-        const conversation = conversationManager.get(conversationId);
-        if (!conversation) {
-            this.sendError(client.id, "CONVERSATION_NOT_FOUND", "Conversation not found", requestId);
-            return;
-        }
+    private async generateResponse(client: AuthenticatedClient, conversationId: string, requestId: string, model: string, keepAlive: number, abort?: AbortController): Promise<void> {
+        const signal = abort?.signal ?? new AbortController().signal;
+        try {
+            const conversation = conversationManager.get(conversationId);
+            if (!conversation) {
+                this.sendError(client.id, "CONVERSATION_NOT_FOUND", "Conversation not found", requestId);
+                return;
+            }
 
-        await this.ensureCompacted(conversation, model, new AbortController().signal);
+            await this.ensureCompacted(conversation, model, signal);
 
         const latest = conversationManager.getLatestUserMessage(conversationId);
         const recall = latest ? await this.recallMemories(latest) : "";
@@ -507,10 +504,9 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             recall ? `${conversation.systemPrompt}\n\n${recall}` : conversation.systemPrompt,
         );
 
-        this.sendStatus(client.id, "generating", requestId);
+            this.sendStatus(client.id, "generating", requestId);
 
-        try {
-            const response = await llmClient.chat({ model, messages, stream: false, keepAlive });
+            const response = await llmClient.chat({ model, messages, stream: false, keepAlive, signal });
 
             conversationManager.addMessage(conversationId, {
                 role: "assistant",
@@ -529,7 +525,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             };
             connectionManager.send(client.id, JSON.stringify(endMsg));
 
-            this.maybeSendVoice(client, requestId, response, new AbortController().signal);
+            this.maybeSendVoice(client, requestId, response, signal);
 
             Log.info("Chat response completed (non-streaming)", {
                 clientId: client.id,
@@ -538,8 +534,11 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                 responseLength: response.length,
             });
         } catch (err: any) {
+            if (err?.name === "AbortError") return;
             Log.error("Generate error", err);
             this.sendError(client.id, "GENERATE_ERROR", err.message, requestId);
+        } finally {
+            streamManager.complete(requestId);
         }
     }
 

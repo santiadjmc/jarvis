@@ -15,7 +15,7 @@ class ApprovalBroker {
     private pending = new Map<string, PendingApproval>();
 
     private key(requestId: string, callId: string): string {
-        return `${callId}:${requestId}`;
+        return `${callId}\0${requestId}`;
     }
 
     wait(requestId: string, callId: string, timeoutMs: number, signal?: AbortSignal): Promise<ApprovalResult> {
@@ -66,7 +66,7 @@ class ApprovalBroker {
     abortRequest(requestId: string): void {
         let aborted = 0;
         for (const [k, entry] of this.pending) {
-            if (k.endsWith(`:${requestId}`)) {
+            if (k.endsWith(`\0${requestId}`)) {
                 if (entry.signal) entry.signal.removeEventListener("abort", entry.onAbort);
                 entry.resolve("deny");
                 aborted++;

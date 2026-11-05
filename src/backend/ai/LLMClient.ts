@@ -305,7 +305,6 @@ class LLMClient {
 
     private async rawRequest(url: string, body: unknown, method: "GET" | "POST", signal: AbortSignal | undefined, authenticated: boolean): Promise<FetchResponse> {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), this.timeout);
         const onAbort = () => controller.abort();
         if (signal) {
             if (signal.aborted) controller.abort();
@@ -326,7 +325,6 @@ class LLMClient {
             }
             return response;
         } finally {
-            clearTimeout(timeoutId);
             if (signal) signal.removeEventListener("abort", onAbort);
         }
     }

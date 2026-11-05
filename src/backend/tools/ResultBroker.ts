@@ -14,7 +14,7 @@ class ResultBroker {
     private pending = new Map<string, Pending>();
 
     private key(requestId: string, callId: string): string {
-        return `${callId}:${requestId}`;
+        return `${callId}\0${requestId}`;
     }
 
     wait(
@@ -101,7 +101,7 @@ class ResultBroker {
     abortRequest(requestId: string): void {
         let aborted = 0;
         for (const [k, entry] of this.pending) {
-            if (k.endsWith(`:${requestId}`)) {
+            if (k.endsWith(`\0${requestId}`)) {
                 if (entry.signal) entry.signal.removeEventListener("abort", entry.onAbort);
                 entry.resolve({ success: false, error: "cancelled", executionTimeMs: 0 });
                 aborted++;

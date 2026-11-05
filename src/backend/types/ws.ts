@@ -110,6 +110,7 @@ export type ServerMessage =
     | ErrorMessage
     | PongMessage
     | ConfigResponseMessage
+    | GoogleAccountStatusMessage
     | SessionCreatedMessage;
 
 export interface TokenMessage {
@@ -194,6 +195,11 @@ export interface ConfigResponseMessage {
     id: string;
     key: string;
     value: unknown;
+}
+
+export interface GoogleAccountStatusMessage {
+    type: "google_account_status";
+    connected: boolean;
 }
 
 export interface SessionCreatedMessage {
