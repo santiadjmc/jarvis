@@ -230,6 +230,7 @@ class ChatController extends Notifier<ChatState> {
   List<ChatMessage> _messages = [];
   final Map<String, String> _callToMessage = {};
   final Set<String> _runningCalls = {};
+  final Set<String> _speakRequestIds = {};
   String? _voiceOriginatedRequestId;
   Timer? _relistenFallback;
   bool _ttsHooked = false;
@@ -379,7 +380,7 @@ class ChatController extends Notifier<ChatState> {
         _onVoice(voice);
       case ConfigResponseMessage config:
         _onConfigResponse(config);
-      case PongMessage() || ConnectedMessage():
+      case PongMessage() || ConnectedMessage() || GoogleAccountStatusMessage():
         break;
     }
   }
@@ -554,8 +555,6 @@ class ChatController extends Notifier<ChatState> {
   }
 
   static String _appendStreamChunk(String current, String chunk) {
-    if (chunk.isEmpty || current.endsWith(chunk)) return current;
-    if (chunk.startsWith(current)) return chunk;
     return current + chunk;
   }
 
@@ -599,9 +598,8 @@ class ChatController extends Notifier<ChatState> {
   }
 
   void _onVoice(VoiceResponseMessage voice) {
-    final isReplay = _messages.any((m) => m.id == voice.requestId);
     final cfg = ref.read(settingsControllerProvider);
-    if (!isReplay && !cfg.voiceReplies) return;
+    if (!cfg.voiceReplies && !_speakRequestIds.contains(voice.requestId)) return;
     if (voice.requestId == _voiceOriginatedRequestId) {
       _relistenFallback?.cancel();
       _relistenFallback = null;
@@ -651,6 +649,7 @@ class ChatController extends Notifier<ChatState> {
 
   void speakMessage(String messageId, String text) {
     if (text.trim().isEmpty) return;
+    _speakRequestIds.add(messageId);
     ref.read(connectionControllerProvider.notifier).sendSpeak(text: text, requestId: messageId);
   }
 
@@ -692,6 +691,7 @@ class ChatController extends Notifier<ChatState> {
     _relistenFallback = null;
     _callToMessage.clear();
     _runningCalls.clear();
+    _speakRequestIds.clear();
     _sessionId = _uuid.v4();
     _persistTimer?.cancel();
     ref.read(ttsControllerProvider.notifier).clear();
