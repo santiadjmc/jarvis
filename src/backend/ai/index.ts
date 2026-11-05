@@ -297,7 +297,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             let result;
             if (approvalRequired && !approvalsAuto) {
                 this.sendStatus(client.id, "tool_calling", requestId, `Waiting for approval: ${name}`);
-                const decision = await approvalBroker.wait(requestId, callId, APPROVAL_TIMEOUT_MS, signal);
+                const decision = await approvalBroker.wait(requestId, callId, APPROVAL_TIMEOUT_MS, signal, client.id);
                 if (signal.aborted) {
                     this.sendCancelledToolResult(client.id, name, requestId, callId);
                     return;

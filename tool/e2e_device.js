@@ -1,6 +1,11 @@
 const WebSocket = require("ws");
 
-const [, , host, key, mode, prompt, reconnectPrompt] = process.argv;
+const [, , host, mode, prompt, reconnectPrompt] = process.argv;
+const key = process.env.JARVIS_API_KEY;
+if (!key) {
+    console.error("Missing API key: set the JARVIS_API_KEY environment variable (usage: node tool/e2e_device.js <host> <mode> <prompt> [reconnectPrompt] [approve] [reconnect])");
+    process.exit(2);
+}
 const approve = process.argv.includes("approve");
 const reconnect = process.argv.includes("reconnect");
 const url = `http://${host}/ws?key=${encodeURIComponent(key)}`.replace("http://", "ws://");

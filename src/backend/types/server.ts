@@ -8,8 +8,6 @@ export interface ServerConfig {
         clientTimeoutMs: number;
     };
     auth: {
-        jwtSecret: string;
-        jwtExpiresIn: string;
         apiKeyPrefix: string;
     };
     ai: {
@@ -32,8 +30,6 @@ export interface EnvironmentConfig {
     PORT: number;
     HOST: string;
     CORS_ORIGINS: string;
-    JWT_SECRET: string;
-    JWT_EXPIRES_IN: string;
     API_KEY_PREFIX: string;
     AI_BASE_URL: string;
     AI_API_KEY: string;

@@ -10,6 +10,7 @@ import deviceRegistry from "./server/ws/DeviceRegistry";
 import streamManager from "./server/ws/StreamManager";
 import approvalBroker from "./tools/ApprovalBroker";
 import resultBroker from "./tools/ResultBroker";
+import authService from "./auth/AuthService";
 import llmClient from "./ai/LLMClient";
 import { getAIConfig } from "./ai/config";
 import cacheManager from "./managers/CacheManager";
@@ -18,6 +19,7 @@ import { listDueTasks } from "./agent/Scheduler/taskStore";
 import { isAutoApproveEnabled, setAutoApprove } from "./agent/runtimeConfig";
 import { status as googleStatus, isConfigured as googleConfigured } from "./agent/Google/googleAuth";
 import { getLocalAddresses } from "./utils/network";
+import type { AuthenticatedClient } from "./types/ws";
 import Log from "./Log";
 import { v4 as uuid } from "uuid";
 
@@ -97,7 +99,18 @@ async function boot(): Promise<void> {
 
     messageRouter.register("tool_response", (client, message) => {
         if (message.type === "tool_response") {
-            const resolved = approvalBroker.resolve(message.requestId, message.callId, message.action);
+            if (!authService.hasPermission(client.apiKeyId, "tools:execute")) {
+                Log.warn("Tool response rejected: missing tools:execute permission", { clientId: client.id, role: client.role });
+                connectionManager.send(client.id, JSON.stringify({
+                    type: "error",
+                    id: crypto.randomUUID(),
+                    code: "PERMISSION_DENIED",
+                    message: "This API key is not allowed to approve tool executions.",
+                    requestId: message.id,
+                }));
+                return;
+            }
+            const resolved = approvalBroker.resolve(message.requestId, message.callId, message.action, client.id);
             Log.info("Tool response received", {
                 clientId: client.id,
                 requestId: message.requestId,
@@ -216,8 +229,23 @@ async function boot(): Promise<void> {
     });
 }
 
-function handleConfigMessage(client: { id: string }, message: { id: string; action: string; key: string; value?: unknown }): void {
+function sendConfigError(client: AuthenticatedClient, messageId: string, code: string, text: string): void {
+    connectionManager.send(client.id, JSON.stringify({
+        type: "error",
+        id: crypto.randomUUID(),
+        code,
+        message: text,
+        requestId: messageId,
+    }));
+}
+
+function handleConfigMessage(client: AuthenticatedClient, message: { id: string; action: string; key: string; value?: unknown }): void {
     if (message.action === "get") {
+        if (!authService.hasPermission(client.apiKeyId, "config:read")) {
+            Log.warn("Config get rejected: missing config:read permission", { clientId: client.id });
+            sendConfigError(client, message.id, "PERMISSION_DENIED", "This API key is not allowed to read config.");
+            return;
+        }
         let value: unknown;
         switch (message.key) {
             case "model":
@@ -233,12 +261,7 @@ function handleConfigMessage(client: { id: string }, message: { id: string; acti
                 value = isAutoApproveEnabled();
                 break;
             default:
-                connectionManager.send(client.id, JSON.stringify({
-                    type: "error",
-                    id: message.id,
-                    code: "UNKNOWN_CONFIG",
-                    message: `Unknown config key: ${message.key}`,
-                }));
+                sendConfigError(client, message.id, "UNKNOWN_CONFIG", `Unknown config key: ${message.key}`);
                 return;
         }
         connectionManager.send(client.id, JSON.stringify({
@@ -248,15 +271,21 @@ function handleConfigMessage(client: { id: string }, message: { id: string; acti
             value,
         }));
     } else if (message.action === "set") {
-        if (message.key === "model" && typeof message.value === "string") {
-            modelManager.set(message.value);
-            connectionManager.send(client.id, JSON.stringify({
-                type: "config_response",
-                id: message.id,
-                key: message.key,
-                value: message.value,
-            }));
-        } else if (message.key === "autoApprove" && typeof message.value === "boolean") {
+        if (!authService.hasPermission(client.apiKeyId, "config:write")) {
+            Log.warn("Config set rejected: missing config:write permission", { clientId: client.id, key: message.key });
+            sendConfigError(client, message.id, "PERMISSION_DENIED", "This API key is not allowed to change config.");
+            return;
+        }
+        if (message.key === "autoApprove") {
+            if (!authService.hasPermission(client.apiKeyId, "admin:*")) {
+                Log.warn("autoApprove change rejected: admin only", { clientId: client.id });
+                sendConfigError(client, message.id, "PERMISSION_DENIED", "Changing autoApprove requires an admin API key.");
+                return;
+            }
+            if (typeof message.value !== "boolean") {
+                sendConfigError(client, message.id, "INVALID_VALUE", "autoApprove must be a boolean.");
+                return;
+            }
             setAutoApprove(message.value);
             Log.info("Autonomous mode changed", { autoApprove: message.value, byClient: client.id });
             connectionManager.broadcast(JSON.stringify({
@@ -265,7 +294,19 @@ function handleConfigMessage(client: { id: string }, message: { id: string; acti
                 key: message.key,
                 value: message.value,
             }));
+            return;
         }
+        if (message.key === "model" && typeof message.value === "string") {
+            modelManager.set(message.value);
+            connectionManager.send(client.id, JSON.stringify({
+                type: "config_response",
+                id: message.id,
+                key: message.key,
+                value: message.value,
+            }));
+            return;
+        }
+        sendConfigError(client, message.id, "UNKNOWN_CONFIG", `Unknown or read-only config key: ${message.key}`);
     }
 }
 

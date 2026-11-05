@@ -38,7 +38,7 @@ function load(): TaskFile {
 function save(data: TaskFile): void {
     const path = storePath();
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(data, null, 2));
+    writeFileSync(path, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
 export function listTasks(): ScheduledTask[] {

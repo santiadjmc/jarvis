@@ -1,6 +1,7 @@
 import { v4 as uuid } from "uuid";
 import puppeteer, { type Browser, type Page } from "puppeteer";
 import Log from "../../Log";
+import { assertPublicUrl } from "../../utils/netguard";
 
 const MAX_PAGES = 5;
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -61,7 +62,8 @@ export async function openPage(url: string, existingPageId?: string): Promise<{ 
         pages.set(pageId, { page, lastUsedAt: Date.now() });
     }
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
+    const target = await assertPublicUrl(url);
+    await page.goto(target.toString(), { waitUntil: "domcontentloaded", timeout: NAV_TIMEOUT_MS });
     pages.get(pageId)!.lastUsedAt = Date.now();
     const title = await page.title();
     const text = await page.evaluate(() => document.body?.innerText?.slice(0, 4000) ?? "");

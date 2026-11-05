@@ -49,9 +49,9 @@ const deviceInfo: ToolSpec = {
 
 const deviceGetClipboard: ToolSpec = {
     name: "device_get_clipboard",
-    description: "Read the current text on a client device's clipboard.",
+    description: "Read the current text on a client device's clipboard. Requires user approval since the clipboard may contain passwords or other secrets.",
     category: "utility",
-    requiresApproval: false,
+    requiresApproval: true,
     timeoutMs: 20000,
     runtime: "device",
     capability: "device:get_clipboard",
@@ -129,9 +129,9 @@ const deviceVibrate: ToolSpec = {
 
 const deviceShowNotification: ToolSpec = {
     name: "device_show_notification",
-    description: "Show a local notification on a client device, visible even while the app is backgrounded. Use this to get the user's attention for something important or time-sensitive.",
+    description: "Show a local notification on a client device, visible even while the app is backgrounded. Use this to get the user's attention for something important or time-sensitive. Requires user approval.",
     category: "utility",
-    requiresApproval: false,
+    requiresApproval: true,
     timeoutMs: 20000,
     runtime: "device",
     capability: "device:show_notification",

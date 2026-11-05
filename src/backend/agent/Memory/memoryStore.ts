@@ -45,7 +45,7 @@ function load(): MemoryFile {
 function save(data: MemoryFile): void {
     const path = storePath();
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(data, null, 2));
+    writeFileSync(path, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
 async function embed(text: string): Promise<number[] | null> {

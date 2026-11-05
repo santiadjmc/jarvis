@@ -1,6 +1,6 @@
 import type { ToolContext, ToolResult, ToolSpec } from "../types";
 
-const ALLOWED_TOKEN = /^(?:\d+(?:\.\d+)?|\+|-|\*|\/|\(|\)|,|\s|Math\.\w+|min|max|abs|round|floor|ceil|sqrt|pow|sin|cos|tan|log|exp|PI|E)+$/;
+const ALLOWED_TOKEN = /^(?:\d+(?:\.\d+)?|\+|-|\*|\/|\(|\)|,|\s|Math\.(?:min|max|abs|round|floor|ceil|sqrt|pow|sin|cos|tan|log|exp|PI|E))+$/;
 
 function safeEvaluate(expression: string): number {
     const sanitized = expression

@@ -14,15 +14,18 @@ class AuthService {
 
     private loadFromEnv(): void {
         const masterKey = process.env.JARVIS_MASTER_KEY;
-        if (masterKey) {
-            this.registerKey({
-                name: "master",
-                key: masterKey,
-                role: "admin",
-                permissions: ["admin:*", "chat:send", "chat:history", "voice:send", "voice:receive", "tools:execute", "config:read", "config:write", "sessions:manage", "models:switch"],
-            });
-            Log.info("Master API key loaded from environment");
+        if (!masterKey) return;
+        if (masterKey === "jvs_change_me_this_is_the_admin_key") {
+            Log.error("Refusing to load JARVIS_MASTER_KEY: it still has the placeholder value from .env.example. Set a unique secret or remove the variable.");
+            return;
         }
+        this.registerKey({
+            name: "master",
+            key: masterKey,
+            role: "admin",
+            permissions: ["admin:*", "chat:send", "chat:history", "voice:send", "voice:receive", "tools:execute", "config:read", "config:write", "sessions:manage", "models:switch"],
+        });
+        Log.info("Master API key loaded from environment");
     }
 
     private registerKey(input: { name: string; key: string; role: ClientRole; permissions: Permission[] }): ApiKey | null {
