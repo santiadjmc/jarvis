@@ -195,16 +195,23 @@ export default class ProcessManager {
 
     private attachHandlers(): void {
         if (!this.child) return;
-        if (this.child.stdout) {
-            this.child.stdout.on("data", (data: Buffer) => this.handleChildStream("out", data));
+        const child = this.child;
+        if (child.stdout) {
+            child.stdout.on("data", (data: Buffer) => this.handleChildStream("out", data));
         }
-        if (this.child.stderr) {
-            this.child.stderr.on("data", (data: Buffer) => this.handleChildStream("err", data));
+        if (child.stderr) {
+            child.stderr.on("data", (data: Buffer) => this.handleChildStream("err", data));
         }
-        this.child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => this.handleExit(code, signal));
-        this.child.on("error", (error: Error) => {
+        child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+            if (this.child !== null && this.child !== child) {
+                this.log("Ignoring exit event from a stale child process");
+                return;
+            }
+            this.handleExit(code, signal);
+        });
+        child.on("error", (error: Error) => {
             this.log(`Process spawn error: ${error.message}`);
-            this.child = null;
+            if (this.child === child) this.child = null;
             this.processStartTime = 0;
             if (this.isShuttingDown || !this.options.autoRestart) {
                 this.setState("stopped");
@@ -230,7 +237,9 @@ export default class ProcessManager {
         this.stopHangWatch();
         this.log(`Bot exited with code ${code}, signal ${signal}${classifyCrash(code, signal) === "clean" ? " (clean)" : ""}`);
         const exitedPid = this.child?.pid;
-        this.child = null;
+        if (this.child !== null) {
+            this.child = null;
+        }
         this.processStartTime = 0;
 
         const rebootRequested = readRebootRequested();

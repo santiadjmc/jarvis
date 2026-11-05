@@ -7,6 +7,7 @@ class CacheManager {
     private redisAvailable = false;
     private memoryCache = new Map<string, CacheEntry<any>>();
     private cleanupInterval: NodeJS.Timer | null = null;
+    private redisReconnectTimer: NodeJS.Timeout | null = null;
     private readonly REDIS_CONNECT_TIMEOUT = 1200;
     private readonly REDIS_OP_TIMEOUT = 100;
     private readonly MEMORY_CLEANUP_INTERVAL = 60000;
@@ -15,6 +16,19 @@ class CacheManager {
     async initialize(): Promise<void> {
         await this.initRedis();
         this.startMemoryCleanup();
+    }
+
+    private markRedisDown(): void {
+        this.redisAvailable = false;
+        this.scheduleRedisReconnect();
+    }
+
+    private scheduleRedisReconnect(): void {
+        if (this.redisReconnectTimer) return;
+        this.redisReconnectTimer = setTimeout(() => {
+            this.redisReconnectTimer = null;
+            void this.initRedis();
+        }, 10000);
     }
 
     private async initRedis(): Promise<void> {
@@ -28,7 +42,7 @@ class CacheManager {
                 }
             }) as RedisClient;
             client.on("error", (error: any) => {
-                this.redisAvailable = false;
+                this.markRedisDown();
                 Log.warn("Redis cache disabled after error", { error: error?.message ?? error });
             });
             await Promise.race([
@@ -41,7 +55,7 @@ class CacheManager {
         }
         catch (error: any) {
             this.redisClient = null;
-            this.redisAvailable = false;
+            this.markRedisDown();
             Log.info("Redis unavailable, using memory cache", { reason: error?.message ?? "unknown" });
         }
     }
@@ -111,7 +125,7 @@ class CacheManager {
                 }
             }
             catch {
-                this.redisAvailable = false;
+                this.markRedisDown();
             }
         }
         return this.getMemoryValue<T>(key);
@@ -125,7 +139,7 @@ class CacheManager {
                 await this.withTimeout(this.redisClient.set(key, payload, opts), this.REDIS_OP_TIMEOUT);
             }
             catch {
-                this.redisAvailable = false;
+                this.markRedisDown();
             }
         }
         this.setMemoryValue(key, value, ttlMs);
@@ -138,7 +152,7 @@ class CacheManager {
                 await this.withTimeout(this.redisClient.del(keys), this.REDIS_OP_TIMEOUT);
             }
             catch {
-                this.redisAvailable = false;
+                this.markRedisDown();
             }
         }
         keys.forEach(k => this.memoryCache.delete(k));
@@ -160,7 +174,7 @@ class CacheManager {
                 return value;
             }
             catch {
-                this.redisAvailable = false;
+                this.markRedisDown();
             }
         }
         const now = Date.now();
@@ -182,7 +196,7 @@ class CacheManager {
                 if (typeof ttl === "number") return ttl;
             }
             catch {
-                this.redisAvailable = false;
+                this.markRedisDown();
             }
         }
         const entry = this.memoryCache.get(key);
@@ -204,7 +218,7 @@ class CacheManager {
                 return false;
             }
             catch {
-                this.redisAvailable = false;
+                this.markRedisDown();
             }
         }
         const now = Date.now();
@@ -285,6 +299,10 @@ class CacheManager {
         if (this.cleanupInterval) {
             clearInterval(this.cleanupInterval as any);
             this.cleanupInterval = null;
+        }
+        if (this.redisReconnectTimer) {
+            clearTimeout(this.redisReconnectTimer);
+            this.redisReconnectTimer = null;
         }
         if (this.redisClient) {
             try {

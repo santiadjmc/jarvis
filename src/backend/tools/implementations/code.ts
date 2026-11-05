@@ -1,6 +1,17 @@
 import type { ToolContext, ToolResult, ToolSpec } from "../types";
 
-const ALLOWED_TOKEN = /^(?:\d+(?:\.\d+)?|\+|-|\*|\/|\(|\)|,|\s|Math\.(?:min|max|abs|round|floor|ceil|sqrt|pow|sin|cos|tan|log|exp|PI|E))+$/;
+const ALLOWED_TOKEN = /\s+|Math\.(?:min|max|abs|round|floor|ceil|sqrt|pow|sin|cos|tan|log|exp|PI|E)|\d+(?:\.\d+)?|[+\-*/(),]/y;
+
+function hasOnlyAllowedTokens(expression: string): boolean {
+    let index = 0;
+    while (index < expression.length) {
+        ALLOWED_TOKEN.lastIndex = index;
+        const match = ALLOWED_TOKEN.exec(expression);
+        if (!match) return false;
+        index = ALLOWED_TOKEN.lastIndex;
+    }
+    return true;
+}
 
 function safeEvaluate(expression: string): number {
     const sanitized = expression
@@ -20,7 +31,7 @@ function safeEvaluate(expression: string): number {
         .replace(/\bPI\b/g, "Math.PI")
         .replace(/\bE\b/g, "Math.E");
 
-    if (!ALLOWED_TOKEN.test(sanitized)) {
+    if (!hasOnlyAllowedTokens(sanitized)) {
         throw new Error("Expression contains characters that are not allowed. Only numbers, + - * / ( ) , and the functions min/max/abs/round/floor/ceil/sqrt/pow/sin/cos/tan/log/exp/PI/E are permitted.");
     }
 

@@ -37,7 +37,7 @@ const scheduleTask: ToolSpec = {
 
         let dueAt: number;
         const inMinutes = Number(params.in_minutes);
-        if (Number.isFinite(inMinutes) && params.in_minutes !== undefined) {
+        if (params.in_minutes != null && Number.isFinite(inMinutes)) {
             dueAt = Date.now() + Math.max(0, inMinutes) * 60000;
         } else if (typeof params.at === "string" && params.at.trim()) {
             const parsed = Date.parse(params.at);

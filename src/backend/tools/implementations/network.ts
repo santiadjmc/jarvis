@@ -44,7 +44,7 @@ const pingHost: ToolSpec = {
                 },
             };
         } catch (err: any) {
-            return { success: true, data: { host, reachable: false, packetLossPercent: 100, rttMinMs: null, rttAvgMs: null, rttMaxMs: null }, error: err.message };
+            return { success: false, data: { host, reachable: false, packetLossPercent: 100, rttMinMs: null, rttAvgMs: null, rttMaxMs: null }, error: err.message };
         }
     },
 };

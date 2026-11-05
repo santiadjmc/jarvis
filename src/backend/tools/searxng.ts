@@ -32,7 +32,7 @@ export async function searchSearXNG(query: string, count = 8, categories = "gene
         clearTimeout(timer);
     }
 
-    if (!response.ok && response.status !== 500) {
+    if (!response.ok) {
         throw new Error(`SearXNG returned HTTP ${response.status}`);
     }
 

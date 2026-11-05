@@ -1,6 +1,6 @@
 export interface ApiKey {
     id: string;
-    key: string;
+    key?: string;
     keyHash: string;
     name: string;
     clientId?: string;
