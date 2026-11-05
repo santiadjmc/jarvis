@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { Socket } from "net";
+import { assertPublicHost } from "../../utils/netguard";
 import type { ToolContext, ToolResult, ToolSpec } from "../types";
 
 const execFileAsync = promisify(execFile);
@@ -69,6 +70,12 @@ const checkPort: ToolSpec = {
         if (!host || !isValidHost(host)) return { success: false, data: null, error: "A valid host is required" };
         if (!Number.isInteger(port) || port < 1 || port > 65535) return { success: false, data: null, error: "port must be between 1 and 65535" };
         const timeoutMs = Math.max(500, Math.min(15000, Number(params.timeoutMs ?? 4000)));
+
+        try {
+            await assertPublicHost(host);
+        } catch (err: any) {
+            return { success: false, data: null, error: err.message };
+        }
 
         const open = await new Promise<boolean>((resolve) => {
             const socket = new Socket();

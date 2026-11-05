@@ -26,15 +26,6 @@ export type Permission =
     | "sessions:manage"
     | "models:switch";
 
-export interface JwtPayload {
-    sub: string;
-    apiKeyId: string;
-    role: ClientRole;
-    permissions: Permission[];
-    iat: number;
-    exp: number;
-}
-
 export interface AuthResult {
     success: boolean;
     clientId?: string;
@@ -42,10 +33,4 @@ export interface AuthResult {
     role?: ClientRole;
     permissions?: Permission[];
     error?: string;
-}
-
-export interface TokenPair {
-    accessToken: string;
-    refreshToken?: string;
-    expiresIn: number;
 }

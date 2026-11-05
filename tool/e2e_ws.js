@@ -1,6 +1,11 @@
 const WebSocket = require("ws");
 
-const [, , host, key, prompt, approveArg, expectTool] = process.argv;
+const [, , host, prompt, approveArg, expectTool] = process.argv;
+const key = process.env.JARVIS_API_KEY;
+if (!key) {
+    console.error("Missing API key: set the JARVIS_API_KEY environment variable (usage: node tool/e2e_ws.js <host> <prompt> [approve] [expectTool])");
+    process.exit(2);
+}
 const approve = approveArg === "approve";
 const url = `ws://${host}/ws?key=${encodeURIComponent(key)}`;
 

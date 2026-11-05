@@ -139,7 +139,7 @@ class SettingsController extends Notifier<AppConfig> {
   }
 
   static String _generateId() {
-    final rng = Random();
+    final rng = Random.secure();
     const hex = '0123456789abcdef';
     final bytes = List<int>.generate(16, (_) => rng.nextInt(256));
     bytes[6] = (bytes[6] & 0x0F) | 0x40;
