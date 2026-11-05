@@ -62,9 +62,14 @@ class TtsController extends Notifier<TtsState> {
       await player.setAudioSource(AudioSource.uri(Uri.file(file.path)));
       state = const TtsState(status: TtsStatus.playing);
       await player.play();
-      await player.playerStateStream.firstWhere(
-        (s) => s.processingState == ProcessingState.completed || race != _generation,
-      );
+      await player.playerStateStream
+          .firstWhere(
+            (s) =>
+                s.processingState == ProcessingState.completed ||
+                s.processingState == ProcessingState.idle ||
+                race != _generation,
+          )
+          .timeout(const Duration(seconds: 120));
     } catch (e) {
       debugPrint('Jarvis: TTS playback failed: $e');
     } finally {

@@ -389,6 +389,16 @@ class ConfigResponseMessage extends ServerMessage {
       );
 }
 
+class GoogleAccountStatusMessage extends ServerMessage {
+  const GoogleAccountStatusMessage({required this.connected});
+
+  final bool connected;
+
+  factory GoogleAccountStatusMessage.fromJson(Map<String, dynamic> json) => GoogleAccountStatusMessage(
+        connected: json['connected'] as bool? ?? false,
+      );
+}
+
 class ConnectedMessage extends ServerMessage {
   const ConnectedMessage({required this.clientId, required this.serverTime, this.deviceId});
 
@@ -430,6 +440,7 @@ sealed class ServerMessage {
       'error' => JarvisError.fromJson(json),
       'pong' => PongMessage.fromJson(json),
       'config_response' => ConfigResponseMessage.fromJson(json),
+      'google_account_status' => GoogleAccountStatusMessage.fromJson(json),
       'connected' => ConnectedMessage.fromJson(json),
       _ => throw FormatException('Unknown server message type: ${json['type']}'),
     };
