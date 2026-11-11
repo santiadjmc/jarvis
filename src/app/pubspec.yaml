@@ -20,7 +20,7 @@ dependencies:
   flutter_markdown: ^0.7.6+1
   uuid: ^4.5.1
   path: ^1.9.1
-  whisper_ggml: ^2.8.1
+  whisper_ggml: ^2.9.0
   url_launcher: ^6.3.2
   device_info_plus: ^13.2.0
   just_audio: ^0.10.6
