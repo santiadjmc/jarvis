@@ -278,7 +278,8 @@ class LLMClient {
             const data = await response.json() as any;
             this.ollamaNative = Array.isArray(data?.models);
         } catch {
-            this.ollamaNative = false;
+            // Don't cache a transient failure (LLM down/restarting); detect again next time.
+            return false;
         }
         return this.ollamaNative;
     }
