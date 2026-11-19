@@ -338,7 +338,12 @@ test("WS origin allow-list matches the HTTP CORS policy (sec L7)", () => {
         assert.equal((wsServer as any).originAllowed("https://evil.example"), false);
         process.env.CORS_ORIGINS = "https://app.example";
         assert.equal((wsServer as any).originAllowed("https://app.example"), true);
-        assert.equal((wsServer as any).originAllowed("http://localhost:5173"), false);
+        // CORS_ORIGINS adds to the localhost default instead of replacing it.
+        assert.equal((wsServer as any).originAllowed("http://localhost:5173"), true);
+        assert.equal((wsServer as any).originAllowed("http://127.0.0.1:8080"), true);
+        assert.equal((wsServer as any).originAllowed("https://evil.example"), false);
+        process.env.CORS_ORIGINS = "http://localhost:3000,http://localhost:5173";
+        assert.equal((wsServer as any).originAllowed("http://localhost:8081"), true, "e.g. a Flutter web dev server");
     } finally {
         if (previous === undefined) delete process.env.CORS_ORIGINS;
         else process.env.CORS_ORIGINS = previous;

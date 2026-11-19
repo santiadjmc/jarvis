@@ -10,6 +10,7 @@ import { validateMessage } from "./Protocol";
 import MessageRouter from "./MessageRouter";
 import authService from "../../auth/AuthService";
 import Log from "../../Log";
+import { originAllowed } from "../origins";
 
 /** Close reason (max 123 bytes) for clients that still send ?key=. */
 export const LEGACY_QUERY_KEY_MESSAGE = "Outdated client: ?key= is no longer accepted. Update the app so it sends Authorization: Bearer <key>.";
@@ -21,15 +22,9 @@ class JarvisWebSocketServer {
     private readonly AUTH_FAILURE_WINDOW_MS = 60000;
     private authFailures = new Map<string, { count: number; resetAt: number }>();
 
+    /** Same policy as the HTTP CORS check (see server/origins.ts). */
     private originAllowed(origin: string): boolean {
-        const configured = (process.env.CORS_ORIGINS || "")
-            .split(",")
-            .map(o => o.trim())
-            .filter(Boolean);
-        if (configured.includes("*")) return true;
-        // Match the HTTP CORS policy: an explicit list replaces the localhost default.
-        if (configured.length > 0) return configured.includes(origin);
-        return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin);
+        return originAllowed(origin);
     }
 
     private isLockedOut(ip: string): boolean {

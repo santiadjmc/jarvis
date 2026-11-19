@@ -150,7 +150,7 @@ All configuration lives in environment variables. See [`.env.example`](.env.exam
 | `PORT`, `HOST` | HTTP/WebSocket listen address. |
 | `JWT_SECRET` | Signs session tokens. Use a long random value. |
 | `JARVIS_MASTER_KEY` | Bootstrap admin API key. Use a long random value. |
-| `CORS_ORIGINS` | Comma-separated browser origins. Defaults to localhost only. |
+| `CORS_ORIGINS` | Comma-separated extra browser origins for the HTTP API and WebSocket. Localhost on any port is always allowed; these are added on top. |
 | `AI_BASE_URL` | OpenAI-compatible API root, e.g. `http://127.0.0.1:11434/v1`. |
 | `AI_API_KEY` | Bearer token for the model endpoint. |
 | `AI_MODEL`, `AI_DEEP_MODEL` | Fast and deep model names. |

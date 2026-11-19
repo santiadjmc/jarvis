@@ -6,6 +6,7 @@ import connectionManager from "./ws/ConnectionManager";
 import { getLocalAddresses } from "../utils/network";
 import { consumeConnectToken, getAuthUrl, handleCallback, isConfigured } from "../agent/Google/googleAuth";
 import Log from "../Log";
+import { originAllowed } from "./origins";
 
 class Server {
     private app: express.Application;
@@ -22,20 +23,10 @@ class Server {
     }
 
     private setupMiddleware(): void {
-        const configuredOrigins = (process.env.CORS_ORIGINS || "")
-            .split(",")
-            .map(origin => origin.trim())
-            .filter(Boolean);
-
         this.app.use(cors({
             origin: (origin, callback) => {
                 if (!origin) return callback(null, true);
-                if (configuredOrigins.includes("*")) return callback(null, true);
-                if (configuredOrigins.length > 0) {
-                    return callback(null, configuredOrigins.includes(origin));
-                }
-                const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin);
-                return callback(null, isLocal);
+                return callback(null, originAllowed(origin));
             },
             methods: ["GET", "POST", "PUT", "DELETE"],
             allowedHeaders: ["Content-Type", "Authorization"],
