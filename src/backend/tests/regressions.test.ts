@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import conversationManager from "../ai/ConversationManager";
 import toolRegistry from "../tools/registry";
+import { decideRestart } from "../ProcessManager";
 import aiOrchestrator from "../ai";
 import { addTask, listTasks } from "../agent/Scheduler/taskStore";
 import llmClient, { finalizeToolCalls } from "../ai/LLMClient";
@@ -235,4 +236,13 @@ test("cancelled tool batches still get a tool result per call (dev H5)", async (
     assert.deepEqual(toolIds, assistant.toolCalls!.map(c => c.id));
     assert.ok(toolIds.every(Boolean));
     conversationManager.delete(conversation.id);
+});
+
+test("restart limit forgives crashes older than the restart window (dev M5)", () => {
+    const base = {
+        code: 1, signal: null, isShuttingDown: false, autoRestart: true, stopOnCleanExit: true,
+        restartCount: 5, maxRestarts: 5, restartWindowMs: 3_600_000,
+    };
+    assert.equal(decideRestart({ ...base, elapsedSinceLastCrash: 7_200_000 }).restart, true);
+    assert.equal(decideRestart({ ...base, elapsedSinceLastCrash: 60_000 }).restart, false);
 });

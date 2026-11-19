@@ -85,7 +85,9 @@ export function decideRestart(args: {
         return { restart: false, resetCount: false, reason: "clean exit" };
     }
     const resetCount = args.elapsedSinceLastCrash > args.restartWindowMs;
-    if (args.restartCount >= args.maxRestarts) return { restart: false, resetCount, reason: "max restarts" };
+    // Crashes older than the window are forgiven before applying the limit.
+    const effectiveCount = resetCount ? 0 : args.restartCount;
+    if (effectiveCount >= args.maxRestarts) return { restart: false, resetCount, reason: "max restarts" };
     return { restart: true, resetCount, reason: "crash" };
 }
 
