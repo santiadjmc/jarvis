@@ -48,7 +48,14 @@ class JarvisWebSocketServer {
             perMessageDeflate: false,
         });
 
-        this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
+        this.wss.on("connection", (ws, req) => {
+            try {
+                this.handleConnection(ws, req);
+            } catch (err: any) {
+                Log.error("WS connection handler failed", err);
+                try { ws.terminate(); } catch { /* already gone */ }
+            }
+        });
         Log.info("WebSocket server attached", { path: "/ws", maxPayload: this.MAX_PAYLOAD });
     }
 
@@ -157,9 +164,15 @@ class JarvisWebSocketServer {
     }
 
     private extractApiKey(req: IncomingMessage): string | null {
-        const url = new URL(req.url || "/", `http://${req.headers.host}`);
-        const fromQuery = url.searchParams.get("key");
-        if (fromQuery) return fromQuery;
+        // The Host header is attacker-controlled and never needed here; parsing it
+        // can throw synchronously inside ws's connection emit and kill the process.
+        try {
+            const url = new URL(req.url || "/", "http://localhost");
+            const fromQuery = url.searchParams.get("key");
+            if (fromQuery) return fromQuery;
+        } catch {
+            // fall through to the Authorization header
+        }
 
         const authHeader = req.headers.authorization;
         if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);

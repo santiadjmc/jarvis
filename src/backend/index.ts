@@ -376,6 +376,14 @@ function startGoogleAuthWatchdog(): void {
     }, CHECK_INTERVAL);
 }
 
+// Last-resort guards: one bad request or stray rejection must not take the server down.
+process.on("uncaughtException", (err) => {
+    Log.error("Uncaught exception (process kept alive)", err);
+});
+process.on("unhandledRejection", (reason) => {
+    Log.error("Unhandled promise rejection", reason instanceof Error ? reason : new Error(String(reason)));
+});
+
 boot().catch((err) => {
     Log.error("Fatal boot error", err);
     process.exit(1);
