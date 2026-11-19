@@ -155,13 +155,19 @@ export interface GuardedFetchInit {
     signal?: AbortSignal;
 }
 
+const CREDENTIAL_HEADERS = new Set(["authorization", "cookie", "proxy-authorization", "x-api-key", "api-key", "x-auth-token"]);
+const BODY_HEADERS = new Set(["content-type", "content-length", "content-encoding", "content-language", "content-location"]);
+
 export async function guardedFetch(url: string, init: GuardedFetchInit = {}): Promise<Response> {
     let target = await assertPublicUrl(url);
+    let method = (init.method || "GET").toUpperCase();
+    let body = init.body;
+    let headers = init.headers ? { ...init.headers } : undefined;
     for (let redirects = 0; ; redirects++) {
         const response = await fetch(target, {
-            method: init.method || "GET",
-            headers: init.headers,
-            body: init.body,
+            method,
+            headers,
+            body,
             signal: init.signal,
             redirect: "manual",
             dispatcher: publicDispatcher,
@@ -171,6 +177,19 @@ export async function guardedFetch(url: string, init: GuardedFetchInit = {}): Pr
         await response.body?.cancel().catch(() => {});
         if (!location) return response;
         if (redirects >= MAX_REDIRECTS) throw new Error("Too many redirects");
-        target = await assertPublicUrl(new URL(location, target).toString());
+        const next = await assertPublicUrl(new URL(location, target).toString());
+
+        // Follow the fetch spec: never forward credentials to another origin, and
+        // turn 303 (and 301/302 after POST) into a body-less GET.
+        if (headers && next.origin !== target.origin) {
+            headers = Object.fromEntries(Object.entries(headers).filter(([k]) => !CREDENTIAL_HEADERS.has(k.toLowerCase())));
+        }
+        if ((response.status === 303 && method !== "GET" && method !== "HEAD") ||
+            ((response.status === 301 || response.status === 302) && method === "POST")) {
+            method = "GET";
+            body = undefined;
+            if (headers) headers = Object.fromEntries(Object.entries(headers).filter(([k]) => !BODY_HEADERS.has(k.toLowerCase())));
+        }
+        target = next;
     }
 }

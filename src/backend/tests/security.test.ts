@@ -9,7 +9,7 @@ import deviceRegistry from "../server/ws/DeviceRegistry";
 import resultBroker from "../tools/ResultBroker";
 import fileTools from "../tools/implementations/fs";
 import { stripMarkup } from "../tools/implementations/web";
-import { isPrivateAddress } from "../utils/netguard";
+import { guardedFetch, isPrivateAddress } from "../utils/netguard";
 
 test("device ids are bound to the authenticating key; spoofed results are rejected (H3)", async () => {
     const deviceId = crypto.randomUUID();
@@ -158,5 +158,47 @@ test("netguard blocks embedded/translated private IPv6 and reserved IPv4 ranges 
     ];
     for (const [address, expected] of cases) {
         assert.equal(isPrivateAddress(address), expected, address);
+    }
+});
+
+test("guardedFetch strips credentials on cross-origin redirects and downgrades 303 to GET (sec M3)", async () => {
+    const seen: Array<{ method?: string; auth?: string; cookie?: string; body: string }> = [];
+    const sink = http.createServer((req, res) => {
+        let body = "";
+        req.on("data", c => { body += c; });
+        req.on("end", () => {
+            seen.push({ method: req.method, auth: req.headers.authorization, cookie: req.headers.cookie, body });
+            res.end("ok");
+        });
+    });
+    await new Promise<void>(resolve => sink.listen(0, "127.0.0.1", resolve));
+    const sinkPort = (sink.address() as net.AddressInfo).port;
+    const redirector = http.createServer((req, res) => {
+        req.resume();
+        const status = req.url === "/see-other" ? 303 : 302;
+        res.writeHead(status, { Location: `http://localhost:${sinkPort}/landing` });
+        res.end();
+    });
+    await new Promise<void>(resolve => redirector.listen(0, "127.0.0.1", resolve));
+    const redirPort = (redirector.address() as net.AddressInfo).port;
+
+    const previous = process.env.JARVIS_FETCH_ALLOW_PRIVATE;
+    process.env.JARVIS_FETCH_ALLOW_PRIVATE = "1";
+    try {
+        const headers = { Authorization: "Bearer secret", Cookie: "sid=1", "X-Other": "kept" };
+        await (await guardedFetch(`http://127.0.0.1:${redirPort}/go`, { headers })).text();
+        await (await guardedFetch(`http://127.0.0.1:${redirPort}/see-other`, { method: "POST", headers, body: "payload" })).text();
+        assert.equal(seen.length, 2);
+        for (const hit of seen) {
+            assert.equal(hit.auth, undefined);
+            assert.equal(hit.cookie, undefined);
+        }
+        assert.equal(seen[1].method, "GET");
+        assert.equal(seen[1].body, "");
+    } finally {
+        if (previous === undefined) delete process.env.JARVIS_FETCH_ALLOW_PRIVATE;
+        else process.env.JARVIS_FETCH_ALLOW_PRIVATE = previous;
+        await new Promise<void>(resolve => sink.close(() => resolve()));
+        await new Promise<void>(resolve => redirector.close(() => resolve()));
     }
 });
