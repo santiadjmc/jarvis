@@ -5,6 +5,32 @@ import net from "node:net";
 import wsServer from "../server/ws/WebSocketServer";
 import messageRouter from "../server/ws/MessageRouter";
 import authService from "../auth/AuthService";
+import deviceRegistry from "../server/ws/DeviceRegistry";
+import resultBroker from "../tools/ResultBroker";
+
+test("device ids are bound to the authenticating key; spoofed results are rejected (H3)", async () => {
+    const deviceId = crypto.randomUUID();
+    const info = { deviceId, deviceName: "Victim phone", deviceType: "phone", capabilities: ["device:time"] };
+    const victimConn = crypto.randomUUID();
+    const attackerConn = crypto.randomUUID();
+
+    assert.equal(deviceRegistry.upsert(victimConn, info, "key-victim"), true);
+    assert.equal(deviceRegistry.upsert(attackerConn, info, "key-attacker"), false);
+    assert.equal(deviceRegistry.resolveConnection(deviceId, undefined, "key-victim"), victimConn);
+    assert.equal(deviceRegistry.resolveConnection("phone", undefined, "key-attacker"), undefined);
+
+    const requestId = crypto.randomUUID();
+    const pending = resultBroker.wait(requestId, "call_1", victimConn, 5000, undefined, deviceId, "key-victim");
+    assert.equal(resultBroker.resolve(attackerConn, requestId, "call_1", { success: true, data: "forged" }, deviceId, "key-attacker"), false);
+    assert.equal(resultBroker.resolve(victimConn, requestId, "call_1", { success: true, data: "real" }, deviceId, "key-victim"), true);
+    assert.equal((await pending).data, "real");
+
+    // Same key reconnecting on a new connection is still allowed.
+    const newConn = crypto.randomUUID();
+    assert.equal(deviceRegistry.upsert(newConn, info, "key-victim"), true);
+    deviceRegistry.onClientDisconnect(newConn);
+    deviceRegistry.onClientDisconnect(victimConn);
+});
 
 test("chat requires chat:send permission (M1)", async () => {
     const sent: any[] = [];

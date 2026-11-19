@@ -65,7 +65,10 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         const keepAlive = route.tier === "deep" ? 0 : -1;
         const systemPrompt = message.systemPrompt || this.DEFAULT_SYSTEM_PROMPT;
 
-        const identity = (client.metadata?.deviceId as string | undefined) || client.id;
+        // Conversation ownership is bound to the authenticating key, so a client
+        // claiming another key's deviceId can never reach that device's history.
+        const deviceId = client.metadata?.deviceId as string | undefined;
+        const identity = deviceId ? `${client.apiKeyId}:${deviceId}` : client.id;
 
         const conversation = conversationManager.getOrCreate(
             identity,
@@ -380,7 +383,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             });
         };
 
-        const targetConnection = deviceRegistry.resolveConnection(targetParam, requesterDeviceId);
+        const targetConnection = deviceRegistry.resolveConnection(targetParam, requesterDeviceId, client.apiKeyId);
         const targetDeviceId = targetConnection ? deviceRegistry.getDeviceId(targetConnection) : undefined;
         if (!targetConnection) {
             recordFailure(
@@ -425,7 +428,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             callId,
         });
 
-        const outcome = await resultBroker.wait(requestId, callId, targetConnection, DEVICE_TOOL_TIMEOUT_MS, signal, targetDeviceId);
+        const outcome = await resultBroker.wait(requestId, callId, targetConnection, DEVICE_TOOL_TIMEOUT_MS, signal, targetDeviceId, client.apiKeyId);
         if (signal.aborted) {
             recordFailure("cancelled");
             return;

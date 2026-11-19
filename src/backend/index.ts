@@ -123,12 +123,22 @@ async function boot(): Promise<void> {
 
     messageRouter.register("device_hello", (client, message) => {
         if (message.type !== "device_hello") return;
-        deviceRegistry.upsert(client.id, {
+        const accepted = deviceRegistry.upsert(client.id, {
             deviceId: message.deviceId,
             deviceName: message.deviceName || "",
             deviceType: message.deviceType || "",
             capabilities: message.capabilities || [],
-        });
+        }, client.apiKeyId);
+        if (!accepted) {
+            connectionManager.send(client.id, JSON.stringify({
+                type: "error",
+                id: crypto.randomUUID(),
+                code: "DEVICE_ID_CONFLICT",
+                message: "This device id is registered to a different API key.",
+                requestId: message.id,
+            }));
+            return;
+        }
         client.metadata.deviceId = message.deviceId;
         client.metadata.deviceName = message.deviceName || message.deviceId.slice(0, 8);
         client.metadata.deviceType = message.deviceType || "unknown";
@@ -150,7 +160,7 @@ async function boot(): Promise<void> {
             data: message.data,
             error: message.error,
             executionTimeMs: message.executionTimeMs,
-        }, deviceId);
+        }, deviceId, client.apiKeyId);
         Log.info("Device tool result received", {
             clientId: client.id,
             requestId: message.requestId,

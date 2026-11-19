@@ -6,6 +6,7 @@ interface Pending {
     timer: NodeJS.Timeout;
     connectionId: string;
     deviceId?: string;
+    ownerKeyId?: string;
     signal?: AbortSignal;
     onAbort: () => void;
 }
@@ -24,6 +25,7 @@ class ResultBroker {
         timeoutMs: number,
         signal?: AbortSignal,
         deviceId?: string,
+        ownerKeyId?: string,
     ): Promise<DeviceToolResult> {
         const existing = this.pending.get(this.key(requestId, callId));
         if (existing) return Promise.resolve({ success: false, error: "Duplicate result wait" });
@@ -54,6 +56,7 @@ class ResultBroker {
                 timer,
                 connectionId,
                 deviceId,
+                ownerKeyId,
                 signal,
                 onAbort,
             });
@@ -64,10 +67,13 @@ class ResultBroker {
         });
     }
 
-    resolve(connectionId: string, requestId: string, callId: string, result: DeviceToolResult, deviceId?: string): boolean {
+    resolve(connectionId: string, requestId: string, callId: string, result: DeviceToolResult, deviceId?: string, apiKeyId?: string): boolean {
         const entry = this.pending.get(this.key(requestId, callId));
         if (!entry) return false;
-        const idOk = entry.connectionId === connectionId || (entry.deviceId && entry.deviceId === deviceId);
+        // A result is only accepted from the connection we dispatched to, or from the
+        // same deviceId reconnected under the same API key (never a spoofed deviceId).
+        const keyOk = entry.ownerKeyId === undefined || entry.ownerKeyId === apiKeyId;
+        const idOk = keyOk && (entry.connectionId === connectionId || (!!entry.deviceId && entry.deviceId === deviceId));
         if (!idOk) {
             Log.warn("Rejected device tool result from wrong device", {
                 fromConnectionId: connectionId,
