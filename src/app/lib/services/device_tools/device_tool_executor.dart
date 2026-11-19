@@ -516,6 +516,9 @@ class DeviceToolExecutor {
     final text = params['text'] as String?;
     final x = (params['x'] as num?)?.toInt();
     final y = (params['y'] as num?)?.toInt();
+    if ((x == null || y == null) && (text == null || text.trim().isEmpty)) {
+      return DeviceToolResult.failure('Provide either x and y coordinates or a non-empty text to tap');
+    }
     try {
       final ok = (x != null && y != null)
           ? await AccessibilityService.tapAt(x, y)
