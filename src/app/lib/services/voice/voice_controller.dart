@@ -37,6 +37,10 @@ class VoiceState {
 const _maxListenDuration = Duration(minutes: 2);
 const _silenceStopDelay = Duration(seconds: 4);
 
+/// How long to wait for the recognizer's done/notListening event before
+/// assuming it got lost and resetting to idle.
+const _stopEventGrace = Duration(seconds: 5);
+
 class VoiceController extends Notifier<VoiceState> {
   SpeechToText? _stt;
   AudioRecorder? _recorder;
@@ -48,12 +52,19 @@ class VoiceController extends Notifier<VoiceState> {
   StreamSubscription<Object?>? _partialsSub;
   Timer? _silenceTimer;
   Timer? _maxDurationTimer;
+  Timer? _nativeWatchdog;
+
+  /// Set synchronously while start() is setting up (permission prompt, model
+  /// download), when the status is still idle, so a second tap can't start a
+  /// second session.
+  bool _starting = false;
 
   @override
   VoiceState build() {
     ref.onDispose(() {
       _silenceTimer?.cancel();
       _maxDurationTimer?.cancel();
+      _nativeWatchdog?.cancel();
       unawaited(_audioStreamSub?.cancel());
       unawaited(_partialsSub?.cancel());
       unawaited(_recorder?.dispose());
@@ -70,22 +81,41 @@ class VoiceController extends Notifier<VoiceState> {
 
   Future<void> start(void Function(String text) onFinal) async {
     // Starting again while a session is live would orphan it (mic left open).
-    if (state.status == VoiceStatus.listening || state.status == VoiceStatus.transcribing) return;
-    _onFinal = onFinal;
-    if (_isNative) {
-      // Callers don't await start(), so never let an exception escape.
-      try {
-        await _startNative();
-      } catch (e) {
-        state = VoiceState(status: VoiceStatus.idle, error: 'Could not start voice input: $e');
+    if (_starting || state.status == VoiceStatus.transcribing) return;
+    if (state.status == VoiceStatus.listening) {
+      // The recognizer stopped without telling us; don't stay stuck.
+      if (_isNative && !(_stt?.isListening ?? false)) {
+        _resetNativeToIdle();
+      } else {
+        return;
       }
-    } else if (_isWhisper) {
-      await _startWhisper();
-    } else {
-      state = const VoiceState(
-        status: VoiceStatus.unavailable,
-        error: 'Voice input is not supported on this platform yet.',
-      );
+    }
+    _starting = true;
+    _onFinal = onFinal;
+    try {
+      if (_isNative) {
+        await _startNative();
+      } else if (_isWhisper) {
+        await _startWhisper();
+      } else {
+        state = const VoiceState(
+          status: VoiceStatus.unavailable,
+          error: 'Voice input is not supported on this platform yet.',
+        );
+      }
+    } catch (e) {
+      // Callers don't await start(), so never let an exception escape.
+      state = VoiceState(status: VoiceStatus.idle, error: 'Could not start voice input: $e');
+    } finally {
+      _starting = false;
+    }
+  }
+
+  void _resetNativeToIdle() {
+    _nativeWatchdog?.cancel();
+    _nativeWatchdog = null;
+    if (state.status == VoiceStatus.listening) {
+      state = state.copyWith(status: VoiceStatus.idle, soundLevel: 0);
     }
   }
 
@@ -126,6 +156,12 @@ class VoiceController extends Notifier<VoiceState> {
       _nativeInitialized = true;
     }
     state = state.copyWith(status: VoiceStatus.listening, transcript: '', soundLevel: 0, clearError: true);
+    // listenFor caps the session; if the closing status event never arrives,
+    // fall back to idle instead of ignoring every later start().
+    _nativeWatchdog?.cancel();
+    _nativeWatchdog = Timer(_maxListenDuration + _stopEventGrace, () {
+      if (!(_stt?.isListening ?? false)) _resetNativeToIdle();
+    });
     await _stt!.listen(
       onResult: (result) {
         if (result.finalResult) {
@@ -153,6 +189,10 @@ class VoiceController extends Notifier<VoiceState> {
   Future<void> _stopNative() async {
     if (_stt?.isListening ?? false) {
       await _stt!.stop();
+      _nativeWatchdog?.cancel();
+      _nativeWatchdog = Timer(_stopEventGrace, _resetNativeToIdle);
+    } else {
+      _resetNativeToIdle();
     }
   }
 
