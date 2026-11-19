@@ -8,7 +8,7 @@ Chat, voice, tools, memory, and device control — all wired to the model you ch
 
 [![CI](https://github.com/santiadjmc/jarvis/actions/workflows/ci.yml/badge.svg)](https://github.com/santiadjmc/jarvis/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node.js 22.19+](https://img.shields.io/badge/node-%3E%3D22.19-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Flutter 3.29+](https://img.shields.io/badge/Flutter-3.29%2B-02569B?logo=flutter&logoColor=white)](https://flutter.dev/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
@@ -85,7 +85,7 @@ Enable or restrict tools with `JARVIS_TOOLS` and `JARVIS_DEVICE_TOOLS`.
 
 ## ⚡ Quick start
 
-You need **Node.js 20+**, **Flutter 3.29+**, and a model endpoint. [Ollama](https://ollama.com/) is the path of least resistance.
+You need **Node.js 22.19+**, **Flutter 3.29+**, and a model endpoint. [Ollama](https://ollama.com/) is the path of least resistance.
 
 ### 1. Wake up the server
 
