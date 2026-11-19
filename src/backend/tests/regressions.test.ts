@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import conversationManager from "../ai/ConversationManager";
 import toolRegistry from "../tools/registry";
+import aiOrchestrator from "../ai";
 import { addTask, listTasks } from "../agent/Scheduler/taskStore";
 import llmClient, { finalizeToolCalls } from "../ai/LLMClient";
 import streamManager, { isStreamTimeout } from "../server/ws/StreamManager";
@@ -214,4 +215,24 @@ test("tool calls without backend ids get unique ids (dev L13)", () => {
     assert.notEqual(first[0].id, second[0].id);
     assert.notEqual(first[0].id, first[1].id);
     assert.match(first[0].id!, /^call_/);
+});
+
+test("cancelled tool batches still get a tool result per call (dev H5)", async () => {
+    const conversation = conversationManager.create("client", crypto.randomUUID(), "system", "model");
+    const calls: any[] = [
+        { id: "call_a", type: "function", function: { name: "get_time", arguments: {} } },
+        { type: "function", function: { name: "get_time", arguments: { tz: "UTC" } } },
+    ];
+    conversationManager.addMessage(conversation.id, { role: "assistant", content: "", timestamp: Date.now(), toolCalls: calls });
+    const abort = new AbortController();
+    abort.abort();
+    const client = { id: crypto.randomUUID(), apiKeyId: "none", metadata: {} } as any;
+    await (aiOrchestrator as any).executeToolCalls(client, conversation.id, crypto.randomUUID(), calls, abort.signal, false);
+
+    const messages = conversationManager.getMessages(conversation.id);
+    const toolIds = messages.filter(m => m.role === "tool").map(m => m.tool_call_id);
+    const assistant = messages.find(m => m.role === "assistant")!;
+    assert.deepEqual(toolIds, assistant.toolCalls!.map(c => c.id));
+    assert.ok(toolIds.every(Boolean));
+    conversationManager.delete(conversation.id);
 });

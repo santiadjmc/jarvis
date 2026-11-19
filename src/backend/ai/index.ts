@@ -264,13 +264,22 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         signal: AbortSignal,
         approvalsAuto: boolean,
     ): Promise<void> {
+        // The assistant message already references these objects, so ids assigned
+        // here stay consistent between tool_calls and the tool results.
         for (const call of calls) {
-            if (signal.aborted) return;
+            if (!call.id) call.id = `call_${uuid()}`;
+        }
+        for (let i = 0; i < calls.length; i++) {
+            const call = calls[i];
+            if (signal.aborted) {
+                this.recordCancelledCalls(conversationId, calls.slice(i));
+                return;
+            }
             streamManager.touch(requestId);
 
             const name = call.function?.name;
             const params = (call.function?.arguments as Record<string, unknown>) || {};
-            const callId = call.id || `call_${uuid()}`;
+            const callId = call.id!;
             if (!name) {
                 conversationManager.addMessage(conversationId, {
                     role: "tool",
@@ -319,6 +328,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                 const decision = await approvalBroker.wait(requestId, callId, APPROVAL_TIMEOUT_MS, signal, client.id);
                 if (signal.aborted) {
                     this.sendCancelledToolResult(client.id, name, requestId, callId);
+                    this.recordCancelledCalls(conversationId, calls.slice(i));
                     return;
                 }
                 if (decision === "approve") {
@@ -337,6 +347,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
             if (signal.aborted) {
                 this.sendCancelledToolResult(client.id, name, requestId, callId);
+                this.recordCancelledCalls(conversationId, calls.slice(i));
                 return;
             }
 
@@ -975,6 +986,24 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                 kind: "assistant",
             };
             connectionManager.send(clientId, JSON.stringify(bridgeMsg));
+        }
+    }
+
+    /**
+     * Strict OpenAI-compatible backends reject an assistant tool_calls message
+     * that isn't followed by a tool result for every call, so cancelled calls
+     * still get a synthetic result.
+     */
+    private recordCancelledCalls(conversationId: string, calls: OllamaToolCall[]): void {
+        for (const call of calls) {
+            const name = call.function?.name || "unknown";
+            conversationManager.addMessage(conversationId, {
+                role: "tool",
+                content: toolRegistry.serializeForModel(name, { success: false, data: null, error: "cancelled", executionTimeMs: 0 }),
+                timestamp: Date.now(),
+                tool_name: name,
+                tool_call_id: call.id,
+            });
         }
     }
 
