@@ -46,3 +46,31 @@ test("cumulative model chunks become stream deltas", () => {
     assert.equal(streamDelta("The quick", "The quick"), "");
     assert.equal(streamDelta(" brown", "The quick"), " brown");
 });
+
+test("an uncaught exception exits non-zero so ProcessManager restarts; rejections are only logged", async () => {
+    const { execFile } = await import("node:child_process");
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join, resolve } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "jarvis-crash-"));
+    const handlers = resolve(__dirname, "../utils/crashHandlers.ts");
+    const run = (body: string) => new Promise<{ code: number | null; stdout: string }>((done) => {
+        const file = join(dir, `${crypto.randomUUID()}.ts`);
+        writeFile(file, `import { installCrashHandlers } from ${JSON.stringify(handlers)};\ninstallCrashHandlers();\n${body}\n`).then(() => {
+            execFile(process.execPath, ["--import", "tsx", file], { cwd: resolve(__dirname, "../../.."), timeout: 20000 }, (err, stdout) => {
+                done({ code: err ? (typeof err.code === "number" ? err.code : null) : 0, stdout });
+            });
+        });
+    });
+    try {
+        const crashed = await run(`setTimeout(() => { throw new Error("boom"); }, 0);\nsetTimeout(() => console.log("still alive"), 5000);`);
+        assert.equal(crashed.code, 1);
+        assert.doesNotMatch(crashed.stdout, /still alive/);
+
+        const rejected = await run(`Promise.reject(new Error("nope"));\nsetTimeout(() => console.log("still alive"), 300);`);
+        assert.equal(rejected.code, 0);
+        assert.match(rejected.stdout, /still alive/);
+    } finally {
+        await rm(dir, { recursive: true, force: true });
+    }
+});

@@ -23,6 +23,7 @@ import { closeBrowser } from "./agent/Browser/browserSession";
 import type { AuthenticatedClient } from "./types/ws";
 import Log from "./Log";
 import { v4 as uuid } from "uuid";
+import { installCrashHandlers } from "./utils/crashHandlers";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -408,13 +409,9 @@ function startGoogleAuthWatchdog(): void {
     }, CHECK_INTERVAL);
 }
 
-// Last-resort guards: one bad request or stray rejection must not take the server down.
-process.on("uncaughtException", (err) => {
-    Log.error("Uncaught exception (process kept alive)", err);
-});
-process.on("unhandledRejection", (reason) => {
-    Log.error("Unhandled promise rejection", reason instanceof Error ? reason : new Error(String(reason)));
-});
+// Uncaught exceptions are logged and exit non-zero (ProcessManager restarts us);
+// unhandled rejections are only logged.
+installCrashHandlers();
 
 boot().catch((err) => {
     Log.error("Fatal boot error", err);
