@@ -97,7 +97,7 @@ export async function addMemory(content: string, type: "fact" | "note" = "fact",
     });
 }
 
-/** `trustedOnly` skips entries stored from tainted conversations (used for prompt auto-injection). */
+/** `trustedOnly` skips entries stored from tainted conversations (prompt auto-loading includes them, quoted as untrusted notes). */
 export async function searchMemory(query: string, k = 5, minScore = 0.35, opts: { trustedOnly?: boolean } = {}): Promise<MemorySearchResult[]> {
     const data = load();
     if (opts.trustedOnly) data.entries = data.entries.filter(e => !e.untrusted);
