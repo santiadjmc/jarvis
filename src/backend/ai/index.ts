@@ -383,7 +383,10 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             const spec = toolRegistry.get(name);
             const approvalRequired = spec?.requiresApproval ?? toolRegistry.requiresApproval(name);
 
-            const egressBlock = this.checkEgress(conversationId, name, params, true);
+            // A call the user will be asked to approve is only blocked for secrets;
+            // their approval covers the rest (the prompt shows the full request).
+            const asksUser = !approvalsAuto && (spec?.runtime === "device" ? (spec?.requiresApproval ?? true) : approvalRequired);
+            const egressBlock = this.checkEgress(conversationId, name, params, true, asksUser);
             if (egressBlock) {
                 const blocked: ToolResult = { success: false, data: null, error: egressBlock, executionTimeMs: 0 };
                 connectionManager.send(client.id, JSON.stringify(toolRegistry.sendable(name, blocked, { requestId, callId })));
@@ -1041,13 +1044,14 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
     /**
      * Outbound guard for tainted conversations; returns the block reason or null.
      * URLs the user typed in this conversation are exempt (interactive turns only).
+     * `approved` means the user is asked to approve this call, so only secrets block it.
      */
-    private checkEgress(conversationId: string, name: string, params: Record<string, unknown>, interactive: boolean): string | null {
+    private checkEgress(conversationId: string, name: string, params: Record<string, unknown>, interactive: boolean, approved = false): string | null {
         const conversation = conversationManager.get(conversationId);
         const userTexts = interactive && conversation
             ? conversation.messages.filter(m => m.role === "user" && typeof m.content === "string").map(m => m.content as string)
             : [];
-        const reason = checkOutbound(name, params, this.provenanceFor(conversationId), userTexts);
+        const reason = checkOutbound(name, params, this.provenanceFor(conversationId), { userTexts, approved });
         if (reason) logGuard("outbound call blocked", { conversationId, tool: name, reason });
         return reason;
     }

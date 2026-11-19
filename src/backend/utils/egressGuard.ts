@@ -2,22 +2,28 @@ import type { ProvenanceState } from "./provenance";
 import { guardsEnabled } from "./provenance";
 
 /**
- * Outbound guardrails for tainted conversations (sec H1 remainder).
+ * Outbound guardrails for tainted conversations.
  *
  * Once a conversation has read external content, a prompt-injected model may
  * try to carry local data out through a URL (query string, path, subdomain),
- * a request body or headers. No approval prompt is added; instead:
+ * a request body or headers. No approval prompt is added. Instead, a call is
+ * blocked only when what it sends actually contains:
  *
- * - fetch_url / http_request / browser_open / device_open_url URLs are capped
- *   in length and blocked if they contain secret-looking strings or text read
- *   earlier from local sources (files, git, processes, clipboard, memory),
- *   including its URI/base64/hex-encoded forms;
- * - http_request is limited to GET/HEAD with no body and only benign headers;
- * - browser_type text gets the same size/secret/local-data checks;
- * - tool results are passed through `redactSecrets` before reaching the model.
+ * - a secret-looking value (API key, token, password, private key, the value
+ *   of a secret env var), or
+ * - text read earlier from local sources (files, git, processes, clipboard,
+ *   memory), including its URI/base64/hex-encoded forms. Short, low-entropy
+ *   or ID-like overlaps (commit SHAs, cursors, issue numbers) don't count.
  *
- * A URL the user typed themselves, or one that appears verbatim in local data
- * (a link from their own files), is not treated as exfiltration.
+ * Being in a tainted conversation is not enough on its own: any method, body
+ * or header is fine as long as it carries neither. URLs and browser_type text
+ * are capped at JARVIS_TAINTED_MAX_OUTBOUND_CHARS (default 4096).
+ *
+ * Values the user typed, and URLs the user or their own files gave, are not
+ * treated as exfiltration. When the user explicitly approves a call (for
+ * example http_request), only the secret check still applies.
+ *
+ * Tool results are passed through `redactSecrets` before reaching the model.
  */
 
 /** Tools whose output is the user's local data (worth protecting from egress). */
@@ -36,16 +42,18 @@ const URL_PARAM_TOOLS: Record<string, string> = {
     device_open_url: "url",
 };
 
-const BENIGN_HEADERS = new Set(["accept", "accept-language", "user-agent"]);
-
 const SHINGLE = 20;
 const STEP = 5;
 const MAX_SHINGLES = 60000;
 const MAX_LOCAL_TEXT = 256 * 1024;
+/** A local-data overlap must be at least this long... */
+const MIN_MATCH_CHARS = 24;
+/** ...and at least this varied (bits/char), so padding or repeated characters don't count. */
+const MIN_MATCH_ENTROPY = 3.0;
 
 export function maxOutboundChars(): number {
     const parsed = parseInt(process.env.JARVIS_TAINTED_MAX_OUTBOUND_CHARS || "", 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 512;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 4096;
 }
 
 function normalize(text: string): string {
@@ -81,14 +89,48 @@ export function recordLocalData(state: ProvenanceState, data: unknown): void {
     }
 }
 
-function containsLocalData(state: ProvenanceState, candidate: string): boolean {
-    const set = state.localShingles;
-    if (!set || set.size === 0) return false;
-    const text = normalize(candidate);
-    for (let i = 0; i + SHINGLE <= text.length; i++) {
-        if (set.has(text.slice(i, i + SHINGLE))) return true;
+/** IDs, hashes and cursors: a single token of word characters, no spaces or punctuation. */
+function isIdLike(text: string): boolean {
+    return /^[A-Za-z0-9_-]+$/.test(text.trim());
+}
+
+/** Shingles of text the user typed; overlaps made only of these are ignored. */
+function shinglesOf(texts: string[]): Set<string> {
+    const out = new Set<string>();
+    for (const raw of texts) {
+        const text = normalize(raw);
+        for (let i = 0; i + SHINGLE <= text.length && out.size < MAX_SHINGLES; i++) out.add(text.slice(i, i + SHINGLE));
     }
-    return false;
+    return out;
+}
+
+/**
+ * Returns the first stretch of `candidate` that was read from local data and
+ * is long and varied enough to matter, or null.
+ */
+function localDataMatch(state: ProvenanceState, candidate: string, userShingles: Set<string>): string | null {
+    const set = state.localShingles;
+    if (!set || set.size === 0) return null;
+    const text = normalize(candidate);
+    let spanStart = -1;
+    let spanEnd = -1;
+    const qualifies = (start: number, end: number) => {
+        const span = text.slice(start, end);
+        return span.length >= MIN_MATCH_CHARS && entropy(span) >= MIN_MATCH_ENTROPY && !isIdLike(span);
+    };
+    for (let i = 0; i + SHINGLE <= text.length; i++) {
+        const window = text.slice(i, i + SHINGLE);
+        if (!set.has(window) || userShingles.has(window)) continue;
+        if (spanStart !== -1 && i <= spanEnd) {
+            spanEnd = i + SHINGLE;
+            continue;
+        }
+        if (spanStart !== -1 && qualifies(spanStart, spanEnd)) return text.slice(spanStart, spanEnd);
+        spanStart = i;
+        spanEnd = i + SHINGLE;
+    }
+    if (spanStart !== -1 && qualifies(spanStart, spanEnd)) return text.slice(spanStart, spanEnd);
+    return null;
 }
 
 function printable(text: string): boolean {
@@ -251,10 +293,67 @@ export function containsSecret(text: string): boolean {
 // Outbound checks
 // ---------------------------------------------------------------------------
 
-function payloadProblem(state: ProvenanceState, payload: string): string | null {
-    if (containsSecret(payload)) return "it contains a secret-looking value (API key, token, password or private key)";
-    if (decodedVariants(payload).some(v => containsLocalData(state, v))) return "it contains data read earlier from local files or other private sources";
-    return null;
+export interface OutboundContext {
+    /** Messages the user typed in this conversation. */
+    userTexts?: string[];
+    /** The user will approve (or already approved) this exact call: only secrets still block it. */
+    approved?: boolean;
+}
+
+const URL_PATTERN = /https?:\/\/[^\s"'<>\\`)\]}]+/g;
+
+function urlsIn(texts: Array<string | undefined>): URL[] {
+    const out: URL[] = [];
+    for (const text of texts) {
+        if (!text) continue;
+        for (const raw of text.match(URL_PATTERN) || []) {
+            try {
+                out.push(new URL(raw.replace(/[.,;:!?]+$/, "")));
+            } catch {
+                // not a URL after all
+            }
+        }
+        if (out.length > 2000) break;
+    }
+    return out;
+}
+
+/**
+ * Drops the parts of `url` that come from a URL the user or their own files gave:
+ * a matching host plus path prefix, and query parameters with the same value.
+ * `github.com/me/repo/issues/39` is then judged on "/39" alone.
+ */
+function untrustedParts(url: URL, trusted: URL[]): { pathname: string; search: string } {
+    let pathname = url.pathname;
+    let params = Array.from(url.searchParams.entries());
+    for (const t of trusted) {
+        if (t.hostname !== url.hostname) continue;
+        const prefix = t.pathname.replace(/\/+$/, "");
+        if (prefix && (pathname === prefix || pathname.startsWith(prefix + "/"))) pathname = pathname.slice(prefix.length);
+        params = params.filter(([k, v]) => t.searchParams.get(k) !== v);
+    }
+    return { pathname, search: params.map(([k, v]) => `${k}=${v}`).join("&") };
+}
+
+/** Removes words the user typed (8+ chars) so their own tokens or text don't trigger a block. */
+function withoutUserTyped(text: string, userTexts: string[]): string {
+    let out = text;
+    for (const userText of userTexts) {
+        for (const word of userText.split(/\s+/)) {
+            if (word.length >= 8 && out.includes(word)) out = out.split(word).join(" ");
+        }
+    }
+    return out;
+}
+
+function stringify(value: unknown): string {
+    if (value === undefined || value === null) return "";
+    if (typeof value === "string") return value;
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
 }
 
 /**
@@ -265,52 +364,63 @@ export function checkOutbound(
     name: string,
     params: Record<string, unknown>,
     state: ProvenanceState | undefined,
-    userTexts: string[] = [],
+    context: OutboundContext = {},
 ): string | null {
     if (!state?.tainted || !guardsEnabled()) return null;
+    const userTexts = context.userTexts ?? [];
+    const approved = !!context.approved;
     const limit = maxOutboundChars();
     const prefix = "Blocked because this conversation has read external content (mail, web, documents) and";
+    const userShingles = shinglesOf(userTexts);
 
-    if (name === "http_request") {
-        const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
-        if (method !== "GET" && method !== "HEAD") return `${prefix} only GET/HEAD requests are allowed now (got ${method}).`;
-        if (params.body !== undefined && params.body !== null && String(params.body) !== "") return `${prefix} request bodies are not allowed now.`;
-        if (params.headers && typeof params.headers === "object") {
-            const extra = Object.keys(params.headers as Record<string, unknown>).filter(h => !BENIGN_HEADERS.has(h.toLowerCase()));
-            if (extra.length > 0) return `${prefix} custom headers are not allowed now (${extra.join(", ")}).`;
-        }
-    }
+    // Each piece is something the call would send; `what` names it in the reason.
+    const pieces: Array<{ what: string; text: string; capped?: boolean }> = [];
 
     if (name === "browser_type") {
         const text = typeof params.text === "string" ? params.text : "";
-        if (text.length > limit) return `${prefix} the text is longer than ${limit} characters.`;
-        const problem = payloadProblem(state, text);
-        return problem ? `${prefix} ${problem}.` : null;
+        if (text) pieces.push({ what: "the text", text, capped: true });
     }
 
     const urlParam = URL_PARAM_TOOLS[name];
-    if (!urlParam) return null;
-    const url = typeof params[urlParam] === "string" ? (params[urlParam] as string) : "";
-    if (!url) return null;
-    if (userTexts.some(t => t.includes(url))) return null;
-    if (state.localText && url.length >= 12 && state.localText.includes(url)) return null;
-    if (url.length > limit) return `${prefix} the URL is longer than ${limit} characters.`;
+    const url = urlParam && typeof params[urlParam] === "string" ? (params[urlParam] as string) : "";
+    const userGaveUrl = !!url && (userTexts.some(t => t.includes(url)) || (url.length >= 12 && !!state.localText?.includes(url)));
+    if (url && !userGaveUrl) {
+        if (!approved && url.length > limit) return `${prefix} the URL is longer than ${limit} characters.`;
+        let parsed: URL | null = null;
+        try {
+            parsed = new URL(url);
+        } catch {
+            // the tool itself rejects invalid URLs
+        }
+        if (parsed) {
+            const { pathname, search } = untrustedParts(parsed, urlsIn([...userTexts, state.localText]));
+            // Hostnames only matter through unusually long labels (DNS exfil), so a
+            // domain mentioned in a local file doesn't block normal browsing.
+            const longLabels = parsed.hostname.split(".").filter(label => label.length >= SHINGLE);
+            const text = [parsed.username, parsed.password, ...longLabels, pathname, search, parsed.hash].filter(Boolean).join(" ");
+            pieces.push({ what: "the URL", text });
+        }
+    }
 
-    let parsed: URL;
-    try {
-        parsed = new URL(url);
-    } catch {
-        return null; // the tool itself rejects invalid URLs
+    if (name === "http_request") {
+        const body = stringify(params.body);
+        if (body) pieces.push({ what: "the request body", text: body });
+        if (params.headers && typeof params.headers === "object") {
+            const values = Object.values(params.headers as Record<string, unknown>).map(stringify).filter(Boolean);
+            if (values.length > 0) pieces.push({ what: "the request headers", text: values.join("\n") });
+        }
     }
-    if (containsSecret([parsed.username, parsed.password, parsed.hostname, parsed.pathname, parsed.search, parsed.hash].join(" "))) {
-        return `${prefix} the URL contains a secret-looking value (API key, token, password or private key).`;
-    }
-    // Hostnames are only checked through unusually long labels (DNS exfil), so
-    // a domain mentioned in a local file doesn't block normal browsing.
-    const longLabels = parsed.hostname.split(".").filter(label => label.length >= SHINGLE);
-    const payload = [parsed.username, parsed.password, ...longLabels, parsed.pathname, parsed.search, parsed.hash].join(" ");
-    if (decodedVariants(payload).some(v => containsLocalData(state, v))) {
-        return `${prefix} the URL contains data read earlier from local files or other private sources.`;
+
+    for (const piece of pieces) {
+        if (piece.capped && !approved && piece.text.length > limit) return `${prefix} ${piece.what} is longer than ${limit} characters.`;
+        const text = withoutUserTyped(piece.text, userTexts);
+        if (containsSecret(text)) {
+            return `${prefix} ${piece.what} contains a secret-looking value (API key, token, password or private key).`;
+        }
+        if (approved) continue;
+        if (decodedVariants(text).some(v => localDataMatch(state, v, userShingles) !== null)) {
+            return `${prefix} ${piece.what} contains data read earlier from local files or other private sources.`;
+        }
     }
     return null;
 }

