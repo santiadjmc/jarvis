@@ -60,7 +60,21 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
     async handleChat(client: AuthenticatedClient, message: any): Promise<void> {
         const requestId = message.id as string;
-        const route = await modelRouter.route(message.content || "", message.model);
+        // Register the stream before routing (the classifier can take a while) so
+        // a cancel sent during routing is honoured.
+        const abort = new AbortController();
+        streamManager.create(client.id, "", message.model || "", abort, requestId);
+        let route: Awaited<ReturnType<typeof modelRouter.route>>;
+        try {
+            route = await modelRouter.route(message.content || "", message.model);
+        } catch (err) {
+            streamManager.complete(requestId);
+            throw err;
+        }
+        if (abort.signal.aborted) {
+            streamManager.complete(requestId);
+            return;
+        }
         const model = route.model;
         const keepAlive = route.tier === "deep" ? 0 : -1;
         const systemPrompt = message.systemPrompt || this.DEFAULT_SYSTEM_PROMPT;
@@ -86,16 +100,19 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
         if (message.voice === true) this.voiceRequests.add(requestId);
 
+        const stream = streamManager.get(requestId);
+        if (stream) {
+            stream.sessionId = conversation.id;
+            stream.model = model;
+        }
+
         const shouldStream = message.stream !== false;
 
         if (shouldStream) {
-            const abort = new AbortController();
-            const streamId = streamManager.create(client.id, conversation.id, model, abort, requestId);
+            const streamId = requestId;
             this.sendStatus(client.id, "thinking", streamId);
             await this.runAgent(client, conversation.id, model, keepAlive, route.tier, streamId, abort);
         } else {
-            const abort = new AbortController();
-            streamManager.create(client.id, conversation.id, model, abort, requestId);
             this.sendStatus(client.id, "thinking", requestId);
             await this.generateResponse(client, conversation.id, requestId, model, keepAlive, abort);
         }

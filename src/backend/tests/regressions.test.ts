@@ -7,6 +7,7 @@ import modelManager from "../ai/ModelManager";
 import { status as googleStatus } from "../agent/Google/googleAuth";
 import ProcessManager, { decideRestart } from "../ProcessManager";
 import aiOrchestrator from "../ai";
+import modelRouter from "../ai/ModelRouter";
 import { addTask, listTasks } from "../agent/Scheduler/taskStore";
 import llmClient, { finalizeToolCalls } from "../ai/LLMClient";
 import streamManager, { isStreamTimeout } from "../server/ws/StreamManager";
@@ -389,5 +390,24 @@ test("streamed tool calls are kept when the server sends no finish_reason (dev L
     } finally {
         client.baseUrl = previousBase;
         await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+});
+
+test("a cancel sent while the model router is classifying is honoured (dev L8)", async () => {
+    const router = modelRouter as any;
+    const originalRoute = router.route;
+    let release!: () => void;
+    router.route = () => new Promise(resolve => { release = () => resolve({ model: "m", tier: "fast" }); });
+    const sessionId = crypto.randomUUID();
+    const client = { id: crypto.randomUUID(), apiKeyId: "none", metadata: {} } as any;
+    const requestId = crypto.randomUUID();
+    try {
+        const pending = aiOrchestrator.handleChat(client, { id: requestId, content: "hi", sessionId });
+        assert.equal(aiOrchestrator.cancelStream(requestId), true, "stream exists during routing");
+        release();
+        await pending;
+        assert.equal(conversationManager.getBySession(sessionId), undefined, "no turn was started");
+    } finally {
+        router.route = originalRoute;
     }
 });
