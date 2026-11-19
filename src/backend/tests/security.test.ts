@@ -127,7 +127,7 @@ test("malformed Host header on WS upgrade does not crash the server (C1)", async
             });
             assert.match(response, /^HTTP\/1\.1 /);
         }
-        assert.equal((wsServer as any).extractApiKey({ url: "/ws?key=abc", headers: { host: "a b" } }), "abc");
+        assert.equal((wsServer as any).extractApiKey({ url: "/ws", headers: { host: "a b", authorization: "Bearer abc" } }), "abc");
         assert.ok(server.listening, "server still listening after malformed Host");
     } finally {
         wsServer.stop();
@@ -322,7 +322,7 @@ test("WS auth lockout rejects before validating the key (dev M7 / sec L3)", () =
     const good = authService.generateKey("lockout-test", "user");
     let closedWith = 0;
     const fakeWs = { close: (code: number) => { closedWith = code; }, on: () => {}, readyState: 1, send: () => {} };
-    ws.handleConnection(fakeWs, { url: `/ws?key=${good.key}`, headers: {}, socket: { remoteAddress: ip } });
+    ws.handleConnection(fakeWs, { url: "/ws", headers: { authorization: `Bearer ${good.key}` }, socket: { remoteAddress: ip } });
     assert.equal(closedWith, 4002, "a correct key must not succeed while locked out");
 
     ws.authFailures.get(ip).resetAt = Date.now() - 1;
@@ -363,4 +363,18 @@ test("tool result serialization keeps __proto__ keys as data (sec I2)", () => {
     const json = toolRegistry.serializeForModel("x", { success: true, data, executionTimeMs: 0 });
     assert.match(json, /"__proto__":\{"polluted":true\}/);
     assert.equal(({} as any).polluted, undefined);
+});
+
+test("WS auth accepts only the Authorization Bearer header, not ?key= (sec L2)", () => {
+    const ws = wsServer as any;
+    const good = authService.generateKey("query-auth-test", "user");
+    assert.equal(ws.extractApiKey({ url: `/ws?key=${good.key}`, headers: {} }), null);
+    assert.equal(ws.extractApiKey({ url: "/ws", headers: { authorization: `Bearer ${good.key}` } }), good.key);
+
+    const ip = "198.51.100.23";
+    let closedWith = 0;
+    const fakeWs = { close: (code: number) => { closedWith = code; }, on: () => {}, readyState: 1, send: () => {} };
+    ws.handleConnection(fakeWs, { url: `/ws?key=${good.key}`, headers: {}, socket: { remoteAddress: ip } });
+    assert.notEqual(closedWith, 0, "a key in the query string must not authenticate");
+    ws.authFailures.delete(ip);
 });

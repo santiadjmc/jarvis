@@ -7,9 +7,10 @@ if (!key) {
     console.error("Missing API key: set the JARVIS_API_KEY environment variable (usage: node tool/e2e_tts.js <host> <prompt>)");
     process.exit(2);
 }
-const url = `ws://${host}/ws?key=${encodeURIComponent(key)}`;
+const url = `ws://${host}/ws`;
+const wsOptions = { headers: { Authorization: `Bearer ${key}` } };
 
-const ws = new WebSocket(url);
+const ws = new WebSocket(url, wsOptions);
 const voiceId = crypto.randomUUID();
 const speakId = crypto.randomUUID();
 let streamReqId = null;

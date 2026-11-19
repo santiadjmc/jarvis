@@ -7,9 +7,10 @@ if (!key) {
     process.exit(2);
 }
 const approve = approveArg === "approve";
-const url = `ws://${host}/ws?key=${encodeURIComponent(key)}`;
+const url = `ws://${host}/ws`;
+const wsOptions = { headers: { Authorization: `Bearer ${key}` } };
 
-const ws = new WebSocket(url);
+const ws = new WebSocket(url, wsOptions);
 const toolCalls = new Map();
 let toolResults = 0;
 let finalModel = null;

@@ -184,16 +184,8 @@ class JarvisWebSocketServer {
     }
 
     private extractApiKey(req: IncomingMessage): string | null {
-        // The Host header is attacker-controlled and never needed here; parsing it
-        // can throw synchronously inside ws's connection emit and kill the process.
-        try {
-            const url = new URL(req.url || "/", "http://localhost");
-            const fromQuery = url.searchParams.get("key");
-            if (fromQuery) return fromQuery;
-        } catch {
-            // fall through to the Authorization header
-        }
-
+        // Only the Authorization header is accepted: a key in the URL query ends up
+        // in proxy/access logs, history and Referer headers (sec L2).
         const authHeader = req.headers.authorization;
         if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
 

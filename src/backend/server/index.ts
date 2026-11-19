@@ -60,7 +60,7 @@ class Server {
                 status: "running",
                 endpoints: {
                     health: "/health",
-                    websocket: "/ws?key=<api_key>",
+                    websocket: "/ws (Authorization: Bearer <api_key>)",
                     googleConnect: "/oauth/google/start",
                 },
             });

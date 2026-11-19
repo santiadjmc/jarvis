@@ -139,7 +139,7 @@ In the app, enter the server address shown in the server log (for example `http:
 
 Open the chat and ask it something. Then try something useful: “What’s in my Downloads folder?”, “Remind me at 6pm to call Alex”, or “Summarize the top story on Hacker News.”
 
-The server authenticates clients with API keys. Set `JARVIS_MASTER_KEY` in `.env` to bootstrap an admin key, or follow the auth flow in `src/backend/auth` for additional keys. Never commit your real `.env`.
+The server authenticates clients with API keys. Set `JARVIS_MASTER_KEY` in `.env` to bootstrap an admin key, or follow the auth flow in `src/backend/auth` for additional keys. WebSocket clients connect to `/ws` and send the key as an `Authorization: Bearer <key>` header; keys in the URL query (`?key=`) are not accepted. Never commit your real `.env`.
 
 ## 🔧 Configuration
 
