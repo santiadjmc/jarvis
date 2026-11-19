@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:uuid/uuid.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:web_socket_channel/io.dart';
 
 import 'package:jarvis/protocol/jarvis_protocol.dart';
 
@@ -13,7 +13,10 @@ Future<void> main(List<String> args) async {
   final prompt = args[2];
   final cancelAfterThinking = Platform.environment['E2E_CANCEL_AFTER_THINKING'] == '1';
 
-  final channel = WebSocketChannel.connect(Uri.parse('ws://$host/ws?key=${Uri.encodeQueryComponent(key)}'));
+  // wss:// by default; set E2E_INSECURE=1 for a plain ws:// LAN server.
+  final scheme = Platform.environment['E2E_INSECURE'] == '1' ? 'ws' : 'wss';
+  final base = host.contains('://') ? host : '$scheme://$host';
+  final channel = IOWebSocketChannel.connect(Uri.parse('$base/ws'), headers: {'Authorization': 'Bearer $key'});
   await channel.ready.timeout(const Duration(seconds: 5));
 
   final sentId = const Uuid().v4();
@@ -32,7 +35,7 @@ Future<void> main(List<String> args) async {
         msg = ServerMessage.fromRaw(raw);
       } on FormatException catch (e) {
         stdout.writeln('PROTOCOL ERROR: ${e.message}');
-        completer.completeError(e);
+        if (!completer.isCompleted) completer.completeError(e);
         return;
       }
       switch (msg) {
@@ -57,12 +60,13 @@ Future<void> main(List<String> args) async {
           }
         case StreamEndMessage():
           finalModel = msg.model;
-          completer.complete();
+          if (!completer.isCompleted) completer.complete();
         case StatusMessage():
           status = msg.status.name;
           stdout.write('\n[status: ${msg.status.name}]');
         case JarvisError():
           stdout.writeln('\n[error: ${msg.message}]');
+          if (completer.isCompleted) break;
           if (cancelled) {
             completer.complete();
           } else {
@@ -76,12 +80,16 @@ Future<void> main(List<String> args) async {
           stdout.writeln('\n[tool_call: ${msg.tool} approval=${msg.approvalRequired}]');
         case ToolResultMessage():
           stdout.writeln('\n[tool_result: ${msg.tool} success=${msg.success}]');
-        case VoiceResponseMessage() || ConfigResponseMessage():
+        case VoiceResponseMessage() || ConfigResponseMessage() || GoogleAccountStatusMessage() || UnknownMessage():
           stdout.writeln('\n[${msg.runtimeType}]');
       }
     },
-    onError: (Object e) => completer.completeError(e),
-    onDone: () => completer.complete(),
+    onError: (Object e) {
+      if (!completer.isCompleted) completer.completeError(e);
+    },
+    onDone: () {
+      if (!completer.isCompleted) completer.complete();
+    },
   );
 
   final t0 = DateTime.now();
