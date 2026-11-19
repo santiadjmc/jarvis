@@ -4,8 +4,9 @@ import { createServer, type Server as HTTPServer } from "http";
 import wsServer from "./ws/WebSocketServer";
 import connectionManager from "./ws/ConnectionManager";
 import { getLocalAddresses } from "../utils/network";
-import { getAuthUrl, handleCallback, isConfigured } from "../agent/Google/googleAuth";
+import { consumeConnectToken, getAuthUrl, handleCallback, isConfigured } from "../agent/Google/googleAuth";
 import Log from "../Log";
+import { originAllowed } from "./origins";
 
 class Server {
     private app: express.Application;
@@ -22,20 +23,10 @@ class Server {
     }
 
     private setupMiddleware(): void {
-        const configuredOrigins = (process.env.CORS_ORIGINS || "")
-            .split(",")
-            .map(origin => origin.trim())
-            .filter(Boolean);
-
         this.app.use(cors({
             origin: (origin, callback) => {
                 if (!origin) return callback(null, true);
-                if (configuredOrigins.includes("*")) return callback(null, true);
-                if (configuredOrigins.length > 0) {
-                    return callback(null, configuredOrigins.includes(origin));
-                }
-                const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin);
-                return callback(null, isLocal);
+                return callback(null, originAllowed(origin));
             },
             methods: ["GET", "POST", "PUT", "DELETE"],
             allowedHeaders: ["Content-Type", "Authorization"],
@@ -60,13 +51,21 @@ class Server {
                 status: "running",
                 endpoints: {
                     health: "/health",
-                    websocket: "/ws?key=<api_key>",
+                    websocket: "/ws (Authorization: Bearer <api_key>)",
                     googleConnect: "/oauth/google/start",
                 },
             });
         });
 
-        this.app.get("/oauth/google/start", (_, res) => {
+        this.app.get("/oauth/google/start", (req, res) => {
+            // Starting the flow replaces the connected Google account, so it needs
+            // either a request from this machine or a one-time token issued to an
+            // authenticated client (config key "googleConnectUrl").
+            const token = typeof req.query.token === "string" ? req.query.token : "";
+            if (!isTrustedLocalRequest(req) && !(token && consumeConnectToken(token))) {
+                res.status(403).send(oauthPage("Not authorized", "Use \"Connect Google\" in the Jarvis app to get a one-time sign-in link, or open this page in a browser on the Jarvis server itself."));
+                return;
+            }
             if (!isConfigured()) {
                 res.status(500).send(oauthPage("Google OAuth isn't configured", "Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI in the server's .env file first."));
                 return;
@@ -132,6 +131,29 @@ class Server {
     getHttpServer(): HTTPServer | null {
         return this.httpServer;
     }
+}
+
+function isLoopback(address: string | undefined): boolean {
+    return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+const PROXY_HEADERS = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"];
+
+/** TRUST_PROXY=1 says Jarvis runs behind a reverse proxy, so loopback means nothing. */
+export function behindProxy(): boolean {
+    return /^(1|true|yes|on)$/i.test((process.env.TRUST_PROXY || "").trim());
+}
+
+/**
+ * A request really made on the server itself. Behind a reverse proxy on the same
+ * host every request arrives from 127.0.0.1, so a request carrying proxy headers
+ * (or any request when TRUST_PROXY is on) is not trusted as local.
+ */
+export function isTrustedLocalRequest(req: { socket: { remoteAddress?: string }; headers?: Record<string, unknown> }): boolean {
+    if (behindProxy()) return false;
+    const headers = req.headers || {};
+    if (PROXY_HEADERS.some(h => headers[h] !== undefined)) return false;
+    return isLoopback(req.socket.remoteAddress);
 }
 
 function oauthPage(title: string, message: string): string {

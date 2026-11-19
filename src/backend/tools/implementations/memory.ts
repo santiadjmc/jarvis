@@ -1,4 +1,5 @@
 import { addMemory, searchMemory, memoryCount, listMemories, deleteMemory } from "../../agent/Memory/memoryStore";
+import { guardsEnabled, logGuard } from "../../utils/provenance";
 import type { ToolContext, ToolResult, ToolSpec } from "../types";
 
 const remember: ToolSpec = {
@@ -14,10 +15,21 @@ const remember: ToolSpec = {
         },
         required: ["fact"],
     },
-    async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+    async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
         const fact = typeof params.fact === "string" ? params.fact.trim() : "";
         if (!fact) return { success: false, data: null, error: "fact is required" };
         try {
+            if (ctx.provenance?.tainted && guardsEnabled()) {
+                // May have been planted by injected content: it is still loaded into
+                // future prompts, but quoted and labelled as notes, not instructions.
+                const sources = ctx.provenance.sources;
+                const id = await addMemory(fact, "fact", { untrusted: true, source: sources.join(",") });
+                logGuard("remember stored as untrusted", { clientId: ctx.clientId, memoryId: id, sources });
+                return {
+                    success: true,
+                    data: { id, stored: fact, untrusted: true, total: memoryCount(), note: "Saved. Because this conversation read external content, it will be shown in future prompts as a quoted note rather than an instruction." },
+                };
+            }
             const id = await addMemory(fact);
             return { success: true, data: { id, stored: fact, total: memoryCount() } };
         } catch (err: any) {

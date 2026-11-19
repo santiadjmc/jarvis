@@ -8,7 +8,8 @@ if (!key) {
 }
 const approve = process.argv.includes("approve");
 const reconnect = process.argv.includes("reconnect");
-const url = `http://${host}/ws?key=${encodeURIComponent(key)}`.replace("http://", "ws://");
+const url = `ws://${host}/ws`;
+const wsOptions = { headers: { Authorization: `Bearer ${key}` } };
 
 const deviceId = mode === "device" ? "dev-sim-1" : "dev-sim-2";
 const deviceName = mode === "device" ? "Sim Phone" : "Sim Desktop";
@@ -57,7 +58,7 @@ function sendChat() {
 }
 
 function connect() {
-    ws = new WebSocket(url);
+    ws = new WebSocket(url, wsOptions);
     ws.on("open", () => {
         hello();
         if (mode === "requester") sendChat();

@@ -29,7 +29,7 @@ const driveListFiles: ToolSpec = {
             const auth = await getGoogleClient();
             const drive = google.drive({ version: "v3", auth });
             const list = await drive.files.list({
-                q: query ? `name contains '${query.replace(/'/g, "\\'")}' and trashed = false` : "trashed = false",
+                q: query ? `name contains '${query.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}' and trashed = false` : "trashed = false",
                 pageSize: maxResults,
                 orderBy: "modifiedTime desc",
                 fields: "files(id,name,mimeType,modifiedTime,size,webViewLink)",

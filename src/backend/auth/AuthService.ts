@@ -19,6 +19,9 @@ class AuthService {
             Log.error("Refusing to load JARVIS_MASTER_KEY: it still has the placeholder value from .env.example. Set a unique secret or remove the variable.");
             return;
         }
+        if (masterKey.length < 32) {
+            Log.warn("JARVIS_MASTER_KEY is shorter than 32 characters; use a long random secret (e.g. openssl rand -base64 36)");
+        }
         this.registerKey({
             name: "master",
             key: masterKey,

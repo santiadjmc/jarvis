@@ -8,7 +8,7 @@ Chat, voice, tools, memory, and device control — all wired to the model you ch
 
 [![CI](https://github.com/santiadjmc/jarvis/actions/workflows/ci.yml/badge.svg)](https://github.com/santiadjmc/jarvis/actions/workflows/ci.yml)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-[![Node.js 20+](https://img.shields.io/badge/node-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![Node.js 22.19+](https://img.shields.io/badge/node-%3E%3D22.19-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![Flutter 3.29+](https://img.shields.io/badge/Flutter-3.29%2B-02569B?logo=flutter&logoColor=white)](https://flutter.dev/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
@@ -85,7 +85,7 @@ Enable or restrict tools with `JARVIS_TOOLS` and `JARVIS_DEVICE_TOOLS`.
 
 ## ⚡ Quick start
 
-You need **Node.js 20+**, **Flutter 3.29+**, and a model endpoint. [Ollama](https://ollama.com/) is the path of least resistance.
+You need **Node.js 22.19+**, **Flutter 3.29+**, and a model endpoint. [Ollama](https://ollama.com/) is the path of least resistance.
 
 ### 1. Wake up the server
 
@@ -141,7 +141,7 @@ On Linux, the app stores the API key with libsecret. Building needs `libsecret-1
 
 Open the chat and ask it something. Then try something useful: “What’s in my Downloads folder?”, “Remind me at 6pm to call Alex”, or “Summarize the top story on Hacker News.”
 
-The server authenticates clients with API keys. Set `JARVIS_MASTER_KEY` in `.env` to bootstrap an admin key, or follow the auth flow in `src/backend/auth` for additional keys. Never commit your real `.env`.
+The server authenticates clients with API keys. Set `JARVIS_MASTER_KEY` in `.env` to bootstrap an admin key, or follow the auth flow in `src/backend/auth` for additional keys. WebSocket clients connect to `/ws` and send the key as an `Authorization: Bearer <key>` header; keys in the URL query (`?key=`) are not accepted. Never commit your real `.env`.
 
 ## 🔧 Configuration
 
@@ -152,7 +152,7 @@ All configuration lives in environment variables. See [`.env.example`](.env.exam
 | `PORT`, `HOST` | HTTP/WebSocket listen address. |
 | `JWT_SECRET` | Signs session tokens. Use a long random value. |
 | `JARVIS_MASTER_KEY` | Bootstrap admin API key. Use a long random value. |
-| `CORS_ORIGINS` | Comma-separated browser origins. Defaults to localhost only. |
+| `CORS_ORIGINS` | Comma-separated extra browser origins for the HTTP API and WebSocket. Localhost on any port is always allowed; these are added on top. |
 | `AI_BASE_URL` | OpenAI-compatible API root, e.g. `http://127.0.0.1:11434/v1`. |
 | `AI_API_KEY` | Bearer token for the model endpoint. |
 | `AI_MODEL`, `AI_DEEP_MODEL` | Fast and deep model names. |
@@ -162,7 +162,9 @@ All configuration lives in environment variables. See [`.env.example`](.env.exam
 | `JARVIS_DEVICE_TOOLS` | Allow/deny device tools. |
 | `JARVIS_AUTO_APPROVE` | `1` to skip approval prompts for risky tools. |
 | `JARVIS_DATA_DIR` | Where memory, tasks, and calendar JSON live. Defaults to `~/.local/share/jarvis`. |
-| `JARVIS_FETCH_ALLOW_PRIVATE` | `1` lets `fetch_url` reach private/loopback addresses. Off by default. |
+| `JARVIS_FS_ROOTS` | Comma-separated roots the read-only file tools may access. Defaults to `$HOME`, the working directory, the temp dir, `/var/log`, `/etc`, `/opt` and `/mnt`; secrets (`.env`, `~/.ssh`, `/etc/shadow`, SSH host keys, TLS private keys, PEM private keys, the data dir, `/proc`) are always refused. |
+| `JARVIS_PROVENANCE_GUARDS`, `JARVIS_TAINTED_*` | Guardrails for conversations that have read external content (mail, web, Drive, browser): scheduled tasks and subagents created from them run with an offline tool set and are capped; memories from them are stored as untrusted and shown to the model as quoted notes, not instructions. Outbound URLs, request bodies/headers and typed text from them are blocked only if they carry secrets or local file data (an approved call is only checked for secrets), and secret-looking strings are redacted from tool results. See `.env.example`. |
+| `JARVIS_FETCH_ALLOW_PRIVATE` | `1` lets `fetch_url`, `http_request` (and its redirects), `check_port` and the headless browser (pages and subresources) reach private/loopback addresses. Off by default. `ping_host` can always reach LAN and loopback hosts. |
 | `TTS_*` | Piper binary, voice, model directory, and speed. |
 | `GOOGLE_*` | OAuth client for Google tools. |
 
@@ -192,9 +194,10 @@ flutter test
 ## 🛡️ Security notes
 
 - Jarvis is designed for a trusted local network. Do not expose the server directly to the public internet without a reverse proxy, TLS, and an authentication review.
+- Behind a reverse proxy, set `TRUST_PROXY=1`. Otherwise a proxy on the same host makes every request look local. Jarvis also refuses to treat a request as local when it carries `X-Forwarded-For`, `Forwarded` or `X-Real-IP` headers, so `/oauth/google/start` then always needs the one-time link from the app's "Connect Google" button.
 - `.env` contains secrets. It is git-ignored; keep it that way and rotate any key that has ever been committed.
 - The server binds to `0.0.0.0` by default so phones on the LAN can connect. Set `HOST=127.0.0.1` if you only use the desktop client.
-- `fetch_url` blocks loopback, private, link-local, and other reserved addresses by default. Set `JARVIS_FETCH_ALLOW_PRIVATE=1` only if you understand the SSRF risk.
+- `fetch_url`, `http_request`, `check_port` and the headless browser block loopback, private, link-local, and other reserved addresses by default (redirects and browser subresources included). Set `JARVIS_FETCH_ALLOW_PRIVATE=1` only if you understand the SSRF risk. `ping_host` is exempt so you can check LAN devices; it still resolves the name first and never passes option-like hosts to `ping`.
 - The Android client requests sensitive permissions (SMS, calls, contacts, location, accessibility) because device tools use them. Review the manifest and disable capabilities you do not need.
 - Risky tools require approval. Keep `JARVIS_AUTO_APPROVE=0` unless you fully trust the model and the prompts it receives.
 

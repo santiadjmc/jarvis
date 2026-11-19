@@ -1,4 +1,5 @@
 import type { ToolCategory } from "../types/agent";
+import type { Provenance } from "../utils/provenance";
 
 export interface ToolParamJsonSchema {
     type: "object";
@@ -24,6 +25,8 @@ export interface ToolContext {
     clientId: string;
     requestId: string;
     targetDeviceId?: string;
+    /** Whether the calling conversation has ingested external content (sec M2). */
+    provenance?: Provenance;
 }
 
 export interface ToolSpec {

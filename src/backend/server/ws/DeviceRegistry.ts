@@ -13,6 +13,7 @@ interface DeviceEntry {
     deviceType: string;
     capabilities: Set<string>;
     connectionId: string;
+    apiKeyId?: string;
     connectedAt: number;
     lastSeen: number;
 }
@@ -21,8 +22,21 @@ class DeviceRegistry {
     private devices = new Map<string, DeviceEntry>();
     private byConnection = new Map<string, string>();
 
-    upsert(connectionId: string, info: DeviceInfo): void {
+    /**
+     * Registers a device for a connection. A deviceId is bound to the API key
+     * that first registered it; a hello claiming a deviceId currently held by a
+     * different key is rejected (returns false) so devices can't be spoofed.
+     */
+    upsert(connectionId: string, info: DeviceInfo, apiKeyId?: string): boolean {
         const now = Date.now();
+        const claimed = this.devices.get(info.deviceId);
+        if (claimed && claimed.connectionId !== connectionId && claimed.apiKeyId !== apiKeyId) {
+            Log.warn("Rejected device_hello: deviceId is registered to a different API key", {
+                deviceId: info.deviceId,
+                connectionId,
+            });
+            return false;
+        }
         const existingConnection = this.byConnection.get(connectionId);
         if (existingConnection && existingConnection !== info.deviceId) {
             const old = this.devices.get(existingConnection);
@@ -47,6 +61,7 @@ class DeviceRegistry {
             deviceType: info.deviceType || "unknown",
             capabilities: new Set(info.capabilities || []),
             connectionId,
+            apiKeyId,
             connectedAt: existing?.connectedAt ?? now,
             lastSeen: now,
         };
@@ -59,6 +74,7 @@ class DeviceRegistry {
             deviceType: entry.deviceType,
             capabilities: entry.capabilities.size,
         });
+        return true;
     }
 
     touch(connectionId: string): void {
@@ -94,25 +110,35 @@ class DeviceRegistry {
         return !!deviceId && this.devices.get(deviceId)?.capabilities.has(capability) === true;
     }
 
-    resolveConnection(target?: string, fallbackDeviceId?: string): string | undefined {
+    /**
+     * Resolves a target device to a connection. When ownerKeyId is given, only
+     * devices registered under that API key are considered.
+     */
+    resolveConnection(target?: string, fallbackDeviceId?: string, ownerKeyId?: string): string | undefined {
+        const candidates = Array.from(this.devices.values())
+            .filter(entry => ownerKeyId === undefined || entry.apiKeyId === ownerKeyId);
         if (target) {
-            const byId = this.devices.get(target);
+            const byId = candidates.find(entry => entry.deviceId === target);
             if (byId) return byId.connectionId;
             const lower = target.toLowerCase();
-            for (const entry of this.devices.values()) {
+            for (const entry of candidates) {
                 if (entry.deviceName.toLowerCase() === lower) return entry.connectionId;
             }
-            for (const entry of this.devices.values()) {
+            for (const entry of candidates) {
                 if (entry.deviceName.toLowerCase().includes(lower)) return entry.connectionId;
             }
             return undefined;
         }
         if (fallbackDeviceId) {
-            const entry = this.devices.get(fallbackDeviceId);
+            const entry = candidates.find(e => e.deviceId === fallbackDeviceId);
             if (entry) return entry.connectionId;
         }
-        const first = this.devices.values().next();
-        return first.done ? undefined : first.value.connectionId;
+        return candidates[0]?.connectionId;
+    }
+
+    getOwnerKeyId(connectionId: string): string | undefined {
+        const deviceId = this.byConnection.get(connectionId);
+        return deviceId ? this.devices.get(deviceId)?.apiKeyId : undefined;
     }
 
     getDeviceId(connectionId: string): string | undefined {

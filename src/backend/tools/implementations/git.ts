@@ -20,6 +20,37 @@ async function git(repo: string, args: string[]): Promise<{ stdout: string; stde
     return execFileAsync("git", ["-C", repo, ...args], { timeout: 15000, maxBuffer: 2 * 1024 * 1024 });
 }
 
+/**
+ * Read-only git calls run without user approval on arbitrary paths, so a
+ * malicious repo's .git/config must not be able to execute commands
+ * (core.fsmonitor, filter drivers, external diff / textconv, hooks).
+ */
+async function readOnlyGit(repo: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+    const overrides = [
+        "-c", "core.fsmonitor=false",
+        "-c", "core.hooksPath=/dev/null",
+        "-c", "protocol.allow=never",
+        "-c", "safe.bareRepository=explicit",
+    ];
+    try {
+        const { stdout } = await execFileAsync("git", ["-C", repo, "config", "--local", "--includes", "--name-only", "--get-regexp", "^filter\\."], {
+            timeout: 5000,
+            env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
+        });
+        const drivers = new Set(stdout.split("\n").filter(Boolean).map(key => key.slice("filter.".length, key.lastIndexOf("."))));
+        for (const driver of drivers) {
+            overrides.push("-c", `filter.${driver}.clean=`, "-c", `filter.${driver}.smudge=`, "-c", `filter.${driver}.process=`, "-c", `filter.${driver}.required=false`);
+        }
+    } catch {
+        // No local filter config (exit 1) or not a repo; the real command reports errors.
+    }
+    return execFileAsync("git", [...overrides, "-C", repo, ...args], {
+        timeout: 15000,
+        maxBuffer: 2 * 1024 * 1024,
+        env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
+    });
+}
+
 const repoParam = { type: "string", description: "Absolute path to the git repository (defaults to the home directory)" };
 
 const gitStatus: ToolSpec = {
@@ -32,8 +63,8 @@ const gitStatus: ToolSpec = {
     async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
         const repo = resolveRepo(params);
         try {
-            const { stdout: branch } = await git(repo, ["branch", "--show-current"]);
-            const { stdout } = await git(repo, ["status", "--porcelain=v1", "-b"]);
+            const { stdout: branch } = await readOnlyGit(repo, ["branch", "--show-current"]);
+            const { stdout } = await readOnlyGit(repo, ["status", "--porcelain=v1", "-b"]);
             return { success: true, data: { repo, branch: branch.trim(), status: truncate(stdout) } };
         } catch (err: any) {
             return { success: false, data: null, error: err.stderr?.trim() || err.message };
@@ -58,7 +89,7 @@ const gitLog: ToolSpec = {
         const repo = resolveRepo(params);
         const count = Math.max(1, Math.min(50, Number(params.count ?? 10)));
         try {
-            const { stdout } = await git(repo, ["log", `-${count}`, "--pretty=format:%H|%an|%ar|%s"]);
+            const { stdout } = await readOnlyGit(repo, ["log", "--no-ext-diff", "--no-textconv", `-${count}`, "--pretty=format:%H|%an|%ar|%s"]);
             const commits = stdout.split("\n").filter(Boolean).map(line => {
                 const [hash, author, date, ...rest] = line.split("|");
                 return { hash, author, date, message: rest.join("|") };
@@ -86,11 +117,11 @@ const gitDiff: ToolSpec = {
     },
     async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
         const repo = resolveRepo(params);
-        const args = ["diff"];
+        const args = ["diff", "--no-ext-diff", "--no-textconv"];
         if (params.staged === true) args.push("--staged");
         if (typeof params.path === "string" && params.path) args.push("--", params.path);
         try {
-            const { stdout } = await git(repo, args);
+            const { stdout } = await readOnlyGit(repo, args);
             return { success: true, data: { repo, diff: truncate(stdout) || "(no changes)" } };
         } catch (err: any) {
             return { success: false, data: null, error: err.stderr?.trim() || err.message };

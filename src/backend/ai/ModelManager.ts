@@ -122,7 +122,11 @@ class ModelManager {
     }
 
     getMaxContext(modelName?: string): number {
-        return this.getConfig(modelName)?.maxContext || 32000;
+        const configured = this.getConfig(modelName)?.maxContext || 32000;
+        // The backend's effective window (e.g. Ollama num_ctx) may be far smaller
+        // than the model's nominal context; compaction must trigger before it truncates.
+        const numCtx = parseInt(process.env.JARVIS_NUM_CTX || "", 10);
+        return Number.isFinite(numCtx) && numCtx > 0 ? Math.min(configured, numCtx) : configured;
     }
 
     async syncWithOllama(): Promise<void> {

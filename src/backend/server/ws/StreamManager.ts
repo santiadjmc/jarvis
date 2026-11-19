@@ -2,9 +2,20 @@ import { v4 as uuid } from "uuid";
 import type { ActiveStream } from "../../types/ws";
 import Log from "../../Log";
 
+export const STREAM_TIMEOUT_REASON = "STREAM_TIMEOUT";
+
+/** Idle limit for a stream; must exceed the approval (60s) and device-tool (90s) waits. */
+function streamIdleTimeoutMs(): number {
+    const parsed = parseInt(process.env.JARVIS_STREAM_IDLE_TIMEOUT_MS || "", 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 180000;
+}
+
+export function isStreamTimeout(signal: AbortSignal): boolean {
+    return signal.aborted && (signal.reason as { name?: string } | undefined)?.name === STREAM_TIMEOUT_REASON;
+}
+
 class StreamManager {
     private activeStreams = new Map<string, ActiveStream>();
-    private readonly STREAM_TIMEOUT = 120000;
 
     create(clientId: string, sessionId: string, model: string, abortController: AbortController, requestId = uuid()): string {
         if (this.activeStreams.has(requestId)) {
@@ -16,6 +27,7 @@ class StreamManager {
             sessionId,
             model,
             startedAt: Date.now(),
+            lastActivityAt: Date.now(),
             abortController,
             fullResponse: "",
         });
@@ -25,7 +37,16 @@ class StreamManager {
 
     appendToken(requestId: string, token: string): void {
         const stream = this.activeStreams.get(requestId);
-        if (stream) stream.fullResponse += token;
+        if (stream) {
+            stream.fullResponse += token;
+            stream.lastActivityAt = Date.now();
+        }
+    }
+
+    /** Marks a stream as making progress (tokens, status changes, tool start/finish). */
+    touch(requestId: string): void {
+        const stream = this.activeStreams.get(requestId);
+        if (stream) stream.lastActivityAt = Date.now();
     }
 
     getFullResponse(requestId: string): string {
@@ -74,9 +95,12 @@ class StreamManager {
     cleanupStale(): number {
         let cleaned = 0;
         const now = Date.now();
+        const limit = streamIdleTimeoutMs();
         for (const [id, stream] of this.activeStreams) {
-            if (now - stream.startedAt > this.STREAM_TIMEOUT) {
-                stream.abortController.abort();
+            if (now - stream.lastActivityAt > limit) {
+                const reason = new Error(`No progress for ${Math.round(limit / 1000)}s`);
+                reason.name = STREAM_TIMEOUT_REASON;
+                stream.abortController.abort(reason);
                 this.activeStreams.delete(id);
                 cleaned++;
             }

@@ -6,6 +6,13 @@ import { google } from "googleapis";
 import type { OAuth2Client, Credentials } from "google-auth-library";
 import Log from "../../Log";
 
+/**
+ * How users (re)connect Google. /oauth/google/start only works from the server
+ * itself or with a one-time token, which the app gets via the "googleConnectUrl"
+ * config key, so point people at the app.
+ */
+export const GOOGLE_CONNECT_HINT = "Use \"Connect Google\" in the Jarvis app, which opens a one-time sign-in link for this server. (Opening /oauth/google/start directly only works in a browser on the Jarvis server itself.)";
+
 export const GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/calendar",
@@ -17,6 +24,8 @@ export const GOOGLE_SCOPES = [
 
 interface StoredTokens extends Credentials {
     savedAt: number;
+    /** When the current refresh token stops working, if known. */
+    refreshExpiresAt?: number | null;
 }
 
 function dataDir(): string {
@@ -37,10 +46,28 @@ function loadTokens(): StoredTokens | null {
     }
 }
 
+/**
+ * expiry_date is the ~1h access token, refreshed on demand, so it says nothing
+ * about whether the connection is healthy. The refresh token's lifetime comes
+ * from Google's refresh_token_expires_in (sent for time-limited "Testing" apps)
+ * or GOOGLE_REFRESH_TOKEN_DAYS; otherwise it is treated as non-expiring.
+ */
+function refreshExpiry(tokens: Credentials, previous: StoredTokens | null, now: number): number | null {
+    if (previous?.refresh_token && previous.refresh_token === tokens.refresh_token) {
+        return previous.refreshExpiresAt ?? null;
+    }
+    const expiresIn = Number((tokens as { refresh_token_expires_in?: unknown }).refresh_token_expires_in);
+    if (Number.isFinite(expiresIn) && expiresIn > 0) return now + expiresIn * 1000;
+    const days = parseFloat(process.env.GOOGLE_REFRESH_TOKEN_DAYS || "");
+    if (Number.isFinite(days) && days > 0) return now + days * 86400000;
+    return null;
+}
+
 function saveTokens(tokens: Credentials): void {
     const dir = dataDir();
     mkdirSync(dir, { recursive: true });
-    const stored: StoredTokens = { ...tokens, savedAt: Date.now() };
+    const now = Date.now();
+    const stored: StoredTokens = { ...tokens, savedAt: now, refreshExpiresAt: refreshExpiry(tokens, loadTokens(), now) };
     writeFileSync(tokenPath(), JSON.stringify(stored, null, 2), { mode: 0o600 });
 }
 
@@ -64,6 +91,30 @@ function buildOAuthClient(): OAuth2Client {
 }
 
 let pendingState: string | null = null;
+
+const CONNECT_TOKEN_TTL_MS = 10 * 60 * 1000;
+const connectTokens = new Map<string, number>();
+
+/**
+ * One-time token that authorizes a non-loopback browser to start the Google
+ * OAuth flow. Issued only over an authenticated WS connection.
+ */
+export function issueConnectToken(): string {
+    const now = Date.now();
+    for (const [token, expiresAt] of connectTokens) {
+        if (expiresAt <= now) connectTokens.delete(token);
+    }
+    const token = randomBytes(24).toString("base64url");
+    connectTokens.set(token, now + CONNECT_TOKEN_TTL_MS);
+    return token;
+}
+
+export function consumeConnectToken(token: string): boolean {
+    const expiresAt = connectTokens.get(token);
+    if (expiresAt === undefined) return false;
+    connectTokens.delete(token);
+    return expiresAt > Date.now();
+}
 
 export function isConfigured(): boolean {
     return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REDIRECT_URI);
@@ -101,7 +152,7 @@ export function status(): { connected: boolean; connectedAt: number | null; expi
     if (!tokens || !tokens.refresh_token) {
         return { connected: false, connectedAt: null, expiresInDays: null, scopes: [] };
     }
-    const expiresInDays = tokens.expiry_date ? Math.round((tokens.expiry_date - Date.now()) / 86400000 * 10) / 10 : null;
+    const expiresInDays = tokens.refreshExpiresAt ? Math.round((tokens.refreshExpiresAt - Date.now()) / 86400000 * 10) / 10 : null;
     return {
         connected: true,
         connectedAt: tokens.savedAt,
@@ -113,7 +164,7 @@ export function status(): { connected: boolean; connectedAt: number | null; expi
 export async function getGoogleClient(): Promise<OAuth2Client> {
     const tokens = loadTokens();
     if (!tokens || !tokens.refresh_token) {
-        throw new Error("No Google account connected. Ask the user to open the Jarvis server's /oauth/google/start URL in a browser to connect one.");
+        throw new Error(`No Google account connected. Tell the user how to connect one: ${GOOGLE_CONNECT_HINT}`);
     }
     const client = buildOAuthClient();
     client.setCredentials(tokens);

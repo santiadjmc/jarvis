@@ -4,6 +4,9 @@ export interface SubagentRequest {
     agentId?: string;
     agentName?: string;
     agentDescription?: string;
+    /** "external" when delegated from a conversation that had ingested external content (sec M2). */
+    origin?: "user" | "external";
+    originSources?: string[];
 }
 
 type Runner = (req: SubagentRequest) => string | null;

@@ -17,11 +17,13 @@ import cacheManager from "./managers/CacheManager";
 import ttsService from "./voice/TtsService";
 import { listDueTasks } from "./agent/Scheduler/taskStore";
 import { isAutoApproveEnabled, setAutoApprove } from "./agent/runtimeConfig";
-import { status as googleStatus, isConfigured as googleConfigured } from "./agent/Google/googleAuth";
+import { status as googleStatus, isConfigured as googleConfigured, issueConnectToken } from "./agent/Google/googleAuth";
 import { getLocalAddresses } from "./utils/network";
+import { closeBrowser } from "./agent/Browser/browserSession";
 import type { AuthenticatedClient } from "./types/ws";
 import Log from "./Log";
 import { v4 as uuid } from "uuid";
+import { installCrashHandlers } from "./utils/crashHandlers";
 
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -93,6 +95,13 @@ async function boot(): Promise<void> {
 
     messageRouter.register("cancel", (client, message) => {
         if (message.type === "cancel") {
+            // Only the client that started a request may cancel it.
+            if (aiOrchestrator.cancelQueued(message.requestId, client.id)) return;
+            const stream = streamManager.get(message.requestId);
+            if (stream && stream.clientId !== client.id) {
+                Log.warn("Cancel rejected: request belongs to another client", { clientId: client.id, requestId: message.requestId });
+                return;
+            }
             aiOrchestrator.cancelStream(message.requestId);
         }
     });
@@ -110,26 +119,41 @@ async function boot(): Promise<void> {
                 }));
                 return;
             }
-            const resolved = approvalBroker.resolve(message.requestId, message.callId, message.action, client.id);
-            Log.info("Tool response received", {
+            const outcome = approvalBroker.resolve(
+                message.requestId, message.callId, message.action,
+                client.id, client.apiKeyId, deviceRegistry.getDeviceId(client.id),
+            );
+            // Re-sent approvals (queued by the app across a reconnect) are expected: debug only.
+            (outcome === "duplicate" ? Log.debug : Log.info).call(Log, "Tool response received", {
                 clientId: client.id,
                 requestId: message.requestId,
                 callId: message.callId,
                 action: message.action,
-                resolved,
+                outcome,
             });
         }
     });
 
     messageRouter.register("device_hello", (client, message) => {
         if (message.type !== "device_hello") return;
-        deviceRegistry.upsert(client.id, {
+        const accepted = deviceRegistry.upsert(client.id, {
             deviceId: message.deviceId,
             deviceName: message.deviceName || "",
             deviceType: message.deviceType || "",
             capabilities: message.capabilities || [],
-        });
+        }, client.apiKeyId);
+        if (!accepted) {
+            connectionManager.send(client.id, JSON.stringify({
+                type: "error",
+                id: crypto.randomUUID(),
+                code: "DEVICE_ID_CONFLICT",
+                message: "This device id is registered to a different API key.",
+                requestId: message.id,
+            }));
+            return;
+        }
         client.metadata.deviceId = message.deviceId;
+        resultBroker.deviceReconnected(message.deviceId, client.apiKeyId);
         client.metadata.deviceName = message.deviceName || message.deviceId.slice(0, 8);
         client.metadata.deviceType = message.deviceType || "unknown";
         client.metadata.capabilities = message.capabilities || [];
@@ -145,18 +169,19 @@ async function boot(): Promise<void> {
     messageRouter.register("tool_execute_result", (client, message) => {
         if (message.type !== "tool_execute_result") return;
         const deviceId = deviceRegistry.getDeviceId(client.id);
-        const resolved = resultBroker.resolve(client.id, message.requestId, message.callId, {
+        const outcome = resultBroker.resolve(client.id, message.requestId, message.callId, {
             success: message.success,
             data: message.data,
             error: message.error,
             executionTimeMs: message.executionTimeMs,
-        }, deviceId);
-        Log.info("Device tool result received", {
+        }, deviceId, client.apiKeyId);
+        // Re-sent results (queued by the app across a reconnect) are expected: debug only.
+        (outcome === "duplicate" ? Log.debug : Log.info).call(Log, "Device tool result received", {
             clientId: client.id,
             requestId: message.requestId,
             callId: message.callId,
             success: message.success,
-            resolved,
+            outcome,
         });
     });
 
@@ -215,6 +240,7 @@ async function boot(): Promise<void> {
     process.on("SIGINT", async () => {
         Log.info("Shutting down Jarvis...");
         conversationManager.stop();
+        await closeBrowser();
         await cacheManager.shutdown();
         await server.stop();
         process.exit(0);
@@ -223,6 +249,7 @@ async function boot(): Promise<void> {
     process.on("SIGTERM", async () => {
         Log.info("Shutting down Jarvis...");
         conversationManager.stop();
+        await closeBrowser();
         await cacheManager.shutdown();
         await server.stop();
         process.exit(0);
@@ -259,6 +286,13 @@ function handleConfigMessage(client: AuthenticatedClient, message: { id: string;
                 break;
             case "autoApprove":
                 value = isAutoApproveEnabled();
+                break;
+            case "googleConnectUrl":
+                if (!authService.hasPermission(client.apiKeyId, "config:write")) {
+                    sendConfigError(client, message.id, "PERMISSION_DENIED", "Connecting a Google account requires config:write.");
+                    return;
+                }
+                value = `/oauth/google/start?token=${issueConnectToken()}`;
                 break;
             default:
                 sendConfigError(client, message.id, "UNKNOWN_CONFIG", `Unknown config key: ${message.key}`);
@@ -368,13 +402,17 @@ function startGoogleAuthWatchdog(): void {
         lastNudgeAt = Date.now();
         const streamId = uuid();
         const text = info.expiresInDays <= 0
-            ? "Heads up — my connection to your Google account just expired. Open /oauth/google/start in a browser whenever you get a chance to reconnect it."
-            : `Heads up — my connection to your Google account expires in about ${info.expiresInDays} day${info.expiresInDays === 1 ? "" : "s"}. Open /oauth/google/start in a browser to reconnect it before then.`;
+            ? "Heads up — my connection to your Google account just expired. Tap \"Connect Google\" in the app whenever you get a chance to reconnect it."
+            : `Heads up — my connection to your Google account expires in about ${info.expiresInDays} day${info.expiresInDays === 1 ? "" : "s"}. Tap "Connect Google" in the app to reconnect it before then.`;
         connectionManager.broadcast(JSON.stringify({ type: "token", id: uuid(), content: text, requestId: streamId, kind: "assistant", proactive: true }));
         connectionManager.broadcast(JSON.stringify({ type: "stream_end", id: uuid(), requestId: streamId, fullResponse: text, model: "system", proactive: true }));
         Log.info("Google auth expiry nudge sent", { expiresInDays: info.expiresInDays });
     }, CHECK_INTERVAL);
 }
+
+// Uncaught exceptions are logged and exit non-zero (ProcessManager restarts us);
+// unhandled rejections are only logged.
+installCrashHandlers();
 
 boot().catch((err) => {
     Log.error("Fatal boot error", err);

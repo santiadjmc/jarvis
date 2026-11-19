@@ -59,9 +59,7 @@ const fetchUrl: ToolSpec = {
             if (!response.ok) {
                 return { success: false, data: null, error: `HTTP ${response.status} ${response.statusText}` };
             }
-            const buffer = Buffer.from(await response.arrayBuffer());
-            const truncated = buffer.length > MAX_FETCH_BYTES;
-            const bytes = truncated ? buffer.subarray(0, MAX_FETCH_BYTES) : buffer;
+            const { buffer: bytes, truncated } = await readCapped(response, MAX_FETCH_BYTES);
             const decoded = bytes.toString("utf-8");
             const stripped = stripMarkup(decoded, response.headers.get("content-type") || "");
             return {
@@ -69,7 +67,7 @@ const fetchUrl: ToolSpec = {
                 data: {
                     url: response.url || url,
                     contentType: response.headers.get("content-type") || "",
-                    bytes: buffer.length,
+                    bytes: bytes.length,
                     truncated,
                     content: stripped.length > MAX_FETCH_BYTES ? stripped.slice(0, MAX_FETCH_BYTES) + "\n...[truncated]" : stripped,
                 },
@@ -82,13 +80,83 @@ const fetchUrl: ToolSpec = {
     },
 };
 
-function stripMarkup(text: string, contentType: string): string {
+/**
+ * Reads at most `max` bytes of a response body, then cancels the stream, so an
+ * endless or huge body can't exhaust memory. `truncated` is true if more data existed.
+ */
+async function readCapped(response: Response, max: number): Promise<{ buffer: Buffer; truncated: boolean }> {
+    const reader = response.body?.getReader();
+    if (!reader) return { buffer: Buffer.alloc(0), truncated: false };
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let truncated = false;
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(Buffer.from(value));
+            total += value.byteLength;
+            if (total > max) {
+                truncated = true;
+                break;
+            }
+        }
+    } finally {
+        reader.cancel().catch(() => {});
+    }
+    const buffer = Buffer.concat(chunks);
+    return { buffer: truncated ? buffer.subarray(0, max) : buffer, truncated };
+}
+
+const RAW_TEXT_TAGS = ["script", "style", "noscript"];
+
+/**
+ * Strips HTML to visible text in a single linear pass. The previous
+ * regex-based version (`/<[^>]+>/g`, lazy `<script[\s\S]*?<\/script>`) was
+ * O(n^2) on inputs with many unclosed `<`, blocking the event loop.
+ */
+export function stripMarkup(text: string, contentType: string): string {
     if (/json|xml/.test(contentType)) return text.trim();
-    return text
-        .replace(/<script[\s\S]*?<\/script>/gi, " ")
-        .replace(/<style[\s\S]*?<\/style>/gi, " ")
-        .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-        .replace(/<[^>]+>/g, " ")
+    // ASCII-only lowercase keeps indices aligned with `text`.
+    const lower = text.replace(/[A-Z]+/g, m => m.toLowerCase());
+    const missingClose = new Set<string>();
+    const out: string[] = [];
+    let i = 0;
+    while (i < text.length) {
+        const lt = text.indexOf("<", i);
+        if (lt === -1) {
+            out.push(text.slice(i));
+            break;
+        }
+        out.push(text.slice(i, lt));
+
+        const rawTag = RAW_TEXT_TAGS.find(tag => !missingClose.has(tag) && lower.startsWith(tag, lt + 1));
+        if (rawTag) {
+            const closeTag = `</${rawTag}>`;
+            const close = lower.indexOf(closeTag, lt + 1 + rawTag.length);
+            if (close !== -1) {
+                out.push(" ");
+                i = close + closeTag.length;
+                continue;
+            }
+            missingClose.add(rawTag);
+        }
+
+        const gt = text.indexOf(">", lt + 1);
+        if (gt === -1) {
+            // No later '>' exists, so no later '<' can start a tag either.
+            out.push(text.slice(lt));
+            break;
+        }
+        if (gt === lt + 1) {
+            out.push("<");
+            i = lt + 1;
+            continue;
+        }
+        out.push(" ");
+        i = gt + 1;
+    }
+    return out.join("")
         .replace(/&nbsp;/gi, " ")
         .replace(/&amp;/gi, "&")
         .replace(/&lt;/gi, "<")
@@ -137,8 +205,8 @@ const httpRequest: ToolSpec = {
         const timer = setTimeout(() => controller.abort(), 15000);
         try {
             const response = await guardedFetch(url, { method, headers, body, signal: controller.signal });
-            const text = await response.text();
-            const truncated = text.length > MAX_FETCH_BYTES;
+            const { buffer, truncated } = await readCapped(response, MAX_FETCH_BYTES);
+            const text = buffer.toString("utf-8");
             return {
                 success: response.ok,
                 data: {
@@ -146,7 +214,7 @@ const httpRequest: ToolSpec = {
                     statusText: response.statusText,
                     contentType: response.headers.get("content-type") || "",
                     truncated,
-                    body: truncated ? text.slice(0, MAX_FETCH_BYTES) + "\n...[truncated]" : text,
+                    body: truncated ? text + "\n...[truncated]" : text,
                 },
                 error: response.ok ? undefined : `HTTP ${response.status} ${response.statusText}`,
             };

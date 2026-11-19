@@ -1,8 +1,7 @@
 import { v4 as uuid } from "uuid";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join, dirname } from "path";
+import { join } from "path";
 import { homedir } from "os";
-import Log from "../../Log";
+import { loadJsonStore, saveJsonAtomic } from "../../utils/jsonStore";
 
 export interface ScheduledTask {
     id: string;
@@ -11,6 +10,14 @@ export interface ScheduledTask {
     recurringEveryMs: number | null;
     createdAt: number;
     lastRunAt: number | null;
+    /** "external" when created from a conversation that had ingested external content (sec M2). */
+    origin?: "user" | "external";
+    originSources?: string[];
+}
+
+export interface TaskOriginMeta {
+    origin: "user" | "external";
+    originSources?: string[];
 }
 
 interface TaskFile {
@@ -25,20 +32,11 @@ function storePath(): string {
 }
 
 function load(): TaskFile {
-    const path = storePath();
-    try {
-        if (!existsSync(path)) return { tasks: [] };
-        return JSON.parse(readFileSync(path, "utf-8")) as TaskFile;
-    } catch (err: any) {
-        Log.warn("Failed to load scheduled tasks, starting fresh", { error: err.message });
-        return { tasks: [] };
-    }
+    return loadJsonStore(storePath(), "tasks", "scheduled tasks") as unknown as TaskFile;
 }
 
 function save(data: TaskFile): void {
-    const path = storePath();
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(data, null, 2), { mode: 0o600 });
+    saveJsonAtomic(storePath(), data);
 }
 
 export function listTasks(): ScheduledTask[] {
@@ -49,8 +47,12 @@ export function listDueTasks(now: number = Date.now()): ScheduledTask[] {
     return load().tasks.filter(t => t.dueAt <= now);
 }
 
-export function addTask(instructions: string, dueAt: number, recurringEveryMs: number | null = null): ScheduledTask {
+export function addTask(instructions: string, dueAt: number, recurringEveryMs: number | null = null, meta?: TaskOriginMeta): ScheduledTask {
     const data = load();
+    if (data.tasks.length >= MAX_TASKS) {
+        // Previously the new task was silently dropped while reported as created.
+        throw new Error(`Too many scheduled tasks (max ${MAX_TASKS}). Cancel one before adding another.`);
+    }
     const task: ScheduledTask = {
         id: uuid(),
         instructions,
@@ -58,11 +60,9 @@ export function addTask(instructions: string, dueAt: number, recurringEveryMs: n
         recurringEveryMs,
         createdAt: Date.now(),
         lastRunAt: null,
+        ...(meta ? { origin: meta.origin, originSources: meta.originSources ?? [] } : {}),
     };
     data.tasks.push(task);
-    if (data.tasks.length > MAX_TASKS) {
-        data.tasks = data.tasks.sort((a, b) => a.dueAt - b.dueAt).slice(0, MAX_TASKS);
-    }
     save(data);
     return task;
 }

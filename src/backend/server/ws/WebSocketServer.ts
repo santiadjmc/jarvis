@@ -10,6 +10,10 @@ import { validateMessage } from "./Protocol";
 import MessageRouter from "./MessageRouter";
 import authService from "../../auth/AuthService";
 import Log from "../../Log";
+import { originAllowed } from "../origins";
+
+/** Close reason (max 123 bytes) for clients that still send ?key=. */
+export const LEGACY_QUERY_KEY_MESSAGE = "Outdated client: ?key= is no longer accepted. Update the app so it sends Authorization: Bearer <key>.";
 
 class JarvisWebSocketServer {
     private wss: WSServer | null = null;
@@ -18,18 +22,25 @@ class JarvisWebSocketServer {
     private readonly AUTH_FAILURE_WINDOW_MS = 60000;
     private authFailures = new Map<string, { count: number; resetAt: number }>();
 
+    /** Same policy as the HTTP CORS check (see server/origins.ts). */
     private originAllowed(origin: string): boolean {
-        const configured = (process.env.CORS_ORIGINS || "")
-            .split(",")
-            .map(o => o.trim())
-            .filter(Boolean);
-        if (configured.includes("*")) return true;
-        if (configured.includes(origin)) return true;
-        return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin);
+        return originAllowed(origin);
+    }
+
+    private isLockedOut(ip: string): boolean {
+        const entry = this.authFailures.get(ip);
+        return !!entry && Date.now() < entry.resetAt && entry.count >= this.MAX_AUTH_FAILURES;
+    }
+
+    private pruneAuthFailures(now: number): void {
+        for (const [ip, entry] of this.authFailures) {
+            if (now >= entry.resetAt) this.authFailures.delete(ip);
+        }
     }
 
     private registerAuthFailure(ip: string): boolean {
         const now = Date.now();
+        if (this.authFailures.size > 1000) this.pruneAuthFailures(now);
         const entry = this.authFailures.get(ip);
         if (entry && now < entry.resetAt) {
             entry.count++;
@@ -48,7 +59,14 @@ class JarvisWebSocketServer {
             perMessageDeflate: false,
         });
 
-        this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
+        this.wss.on("connection", (ws, req) => {
+            try {
+                this.handleConnection(ws, req);
+            } catch (err: any) {
+                Log.error("WS connection handler failed", err);
+                try { ws.terminate(); } catch { /* already gone */ }
+            }
+        });
         Log.info("WebSocket server attached", { path: "/ws", maxPayload: this.MAX_PAYLOAD });
     }
 
@@ -64,8 +82,22 @@ class JarvisWebSocketServer {
 
         const apiKey = this.extractApiKey(req);
         if (!apiKey) {
+            if (this.hasQueryKey(req)) {
+                // Old clients put the key in ?key=; that was dropped on purpose (it leaks
+                // into proxy logs and history), so tell them how to fix it.
+                Log.warn("WS rejected: API key sent as ?key= query parameter; the client needs updating", { remoteAddress });
+                ws.close(4001, LEGACY_QUERY_KEY_MESSAGE);
+                return;
+            }
             Log.warn("WS rejected: missing API key", { remoteAddress });
-            ws.close(4001, "Missing API key");
+            ws.close(4001, "Missing API key: send it as an Authorization: Bearer header");
+            return;
+        }
+
+        // Check the lockout before validating, so a locked-out IP gets no oracle at all.
+        if (this.isLockedOut(remoteAddress)) {
+            Log.warn("WS rejected: too many failed auth attempts", { remoteAddress });
+            ws.close(4002, "Too many failed attempts, slow down");
             return;
         }
 
@@ -156,11 +188,17 @@ class JarvisWebSocketServer {
         MessageRouter.routeBinary(client, messageId, audioData);
     }
 
-    private extractApiKey(req: IncomingMessage): string | null {
-        const url = new URL(req.url || "/", `http://${req.headers.host}`);
-        const fromQuery = url.searchParams.get("key");
-        if (fromQuery) return fromQuery;
+    private hasQueryKey(req: IncomingMessage): boolean {
+        try {
+            return new URL(req.url || "/", "http://localhost").searchParams.has("key");
+        } catch {
+            return false;
+        }
+    }
 
+    private extractApiKey(req: IncomingMessage): string | null {
+        // Only the Authorization header is accepted: a key in the URL query ends up
+        // in proxy/access logs, history and Referer headers (sec L2).
         const authHeader = req.headers.authorization;
         if (authHeader?.startsWith("Bearer ")) return authHeader.slice(7);
 
