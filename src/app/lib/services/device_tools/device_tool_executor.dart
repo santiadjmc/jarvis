@@ -564,6 +564,8 @@ class DeviceToolExecutor {
     }
   }
 
+  static const _whatsappPackages = {'com.whatsapp', 'com.whatsapp.w4b'};
+
   Future<DeviceToolResult> _sendWhatsappMessage(Map<String, dynamic> params) async {
     final gate = await _requireAccessibility();
     if (!gate.success) return gate;
@@ -576,9 +578,24 @@ class DeviceToolExecutor {
       if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
         return DeviceToolResult.failure('Could not open WhatsApp');
       }
-      await Future<void>.delayed(const Duration(milliseconds: 2500));
-      var sent = await AccessibilityService.tapNode(viewId: 'com.whatsapp:id/send');
-      if (!sent) sent = await AccessibilityService.tapNode(text: 'Send');
+      // Wait for WhatsApp itself to be in the foreground; never tap "Send" in
+      // whatever other app (browser, mail, bank) happens to be showing.
+      String? package;
+      for (var i = 0; i < 10; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        package = await AccessibilityService.foregroundPackage();
+        if (_whatsappPackages.contains(package)) break;
+      }
+      if (!_whatsappPackages.contains(package)) {
+        return DeviceToolResult.failure(
+          'WhatsApp did not come to the foreground (found ${package ?? 'unknown app'}); message not sent',
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (await AccessibilityService.foregroundPackage() != package) {
+        return DeviceToolResult.failure('WhatsApp left the foreground before sending; message not sent');
+      }
+      final sent = await AccessibilityService.tapNode(viewId: '$package:id/send');
       return sent
           ? DeviceToolResult(success: true, data: {'to': number, 'sentChars': message.length})
           : DeviceToolResult.failure('Opened WhatsApp with the message ready but could not find/tap the Send button');

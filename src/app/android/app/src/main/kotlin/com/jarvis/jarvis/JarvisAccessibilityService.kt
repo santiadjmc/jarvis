@@ -75,6 +75,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         return null
     }
 
+    fun foregroundPackage(): String? = rootInActiveWindow?.packageName?.toString()
+
     fun tapNode(viewId: String?, text: String?): Boolean {
         val root = rootInActiveWindow ?: return false
         val target = findNode(root, viewId, text) ?: return false
