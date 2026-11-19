@@ -8,6 +8,7 @@ import authService from "../auth/AuthService";
 import deviceRegistry from "../server/ws/DeviceRegistry";
 import resultBroker from "../tools/ResultBroker";
 import fileTools from "../tools/implementations/fs";
+import gitTools from "../tools/implementations/git";
 import { stripMarkup } from "../tools/implementations/web";
 import { guardedFetch, isPrivateAddress } from "../utils/netguard";
 import { checkBrowserRequestUrl } from "../agent/Browser/browserSession";
@@ -215,5 +216,40 @@ test("browser request guard blocks private hosts and non-http schemes (sec H2)",
         assert.equal(await checkBrowserRequestUrl("http://8.8.8.8/"), null);
     } finally {
         if (previous !== undefined) process.env.JARVIS_FETCH_ALLOW_PRIVATE = previous;
+    }
+});
+
+test("read-only git tools don't execute repo-configured commands (sec M5)", async () => {
+    const { mkdtemp, writeFile, readdir, rm, utimes } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { execFileSync } = await import("node:child_process");
+    const repo = await mkdtemp(join(tmpdir(), "jarvis-evilrepo-"));
+    const g = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { stdio: "ignore" });
+    try {
+        g("init", "-q", ".");
+        g("config", "user.email", "t@example.com");
+        g("config", "user.name", "t");
+        await writeFile(join(repo, ".gitattributes"), "* filter=evil diff=evil\n");
+        await writeFile(join(repo, "f.txt"), "hi\n");
+        g("add", ".");
+        g("-c", "filter.evil.clean=cat", "commit", "-qm", "init");
+        g("config", "core.fsmonitor", `touch ${join(repo, "PWN_fsmonitor")}; false`);
+        g("config", "filter.evil.clean", `touch ${join(repo, "PWN_clean")}; cat`);
+        g("config", "filter.evil.process", `touch ${join(repo, "PWN_process")}`);
+        g("config", "diff.evil.textconv", `touch ${join(repo, "PWN_textconv")}; cat`);
+        g("config", "diff.external", `touch ${join(repo, "PWN_external")}`);
+        await writeFile(join(repo, "f.txt"), "changed\n");
+        await utimes(join(repo, "f.txt"), new Date(2000, 0, 1), new Date(2000, 0, 1));
+
+        const ctx = { clientId: "t", requestId: "t" };
+        for (const name of ["git_status", "git_diff", "git_log"]) {
+            const tool = gitTools.find(t => t.name === name)!;
+            await tool.execute({ repo }, ctx);
+        }
+        const pwned = (await readdir(repo)).filter(f => f.startsWith("PWN_"));
+        assert.deepEqual(pwned, []);
+    } finally {
+        await rm(repo, { recursive: true, force: true });
     }
 });
