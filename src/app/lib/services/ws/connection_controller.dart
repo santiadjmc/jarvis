@@ -201,7 +201,12 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
         '"Insecure LAN (ws://)" in settings if this server is on a trusted local network.',
       );
     }
-    return parsed.replace(scheme: scheme, path: '/ws');
+    // Keep any reverse-proxy sub-path (https://host/jarvis -> wss://host/jarvis/ws).
+    var basePath = parsed.path;
+    while (basePath.endsWith('/')) {
+      basePath = basePath.substring(0, basePath.length - 1);
+    }
+    return parsed.replace(scheme: scheme, path: basePath.endsWith('/ws') ? basePath : '$basePath/ws');
   }
 
   void _failConnect(String message) {
