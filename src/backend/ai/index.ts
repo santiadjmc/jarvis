@@ -580,7 +580,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             const summary = await this.summarizeMessages(plan.toSummarize, signal);
             if (!summary) return;
 
-            conversationManager.applyCompaction(id, summary, plan.keepTail);
+            conversationManager.applyCompaction(id, summary, plan.keepTail, plan.snapshotLast);
             Log.info("Compaction applied", { conversationId: id });
         } catch (err: any) {
             if (err?.name === "AbortError") return;

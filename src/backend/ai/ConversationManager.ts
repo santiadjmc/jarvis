@@ -6,6 +6,8 @@ import Log from "../Log";
 interface CompactPlan {
     toSummarize: ConversationMessage[];
     keepTail: ConversationMessage[];
+    /** Last message at snapshot time; anything after it was added during summarization. */
+    snapshotLast?: ConversationMessage;
 }
 
 class ConversationManager {
@@ -211,13 +213,25 @@ class ConversationManager {
             keepTail = keepTail.slice(1);
         }
 
-        return { toSummarize, keepTail };
+        return { toSummarize, keepTail, snapshotLast: messages[messages.length - 1] };
     }
 
-    applyCompaction(conversationId: string, summaryContent: string, keepTail: ConversationMessage[]): void {
+    applyCompaction(conversationId: string, summaryContent: string, keepTail: ConversationMessage[], snapshotLast?: ConversationMessage): void {
         const conv = this.conversations.get(conversationId);
         if (!conv) return;
         const previousLength = conv.messages.length;
+
+        // Summarization is slow and concurrent requests keep appending; carry
+        // those messages over instead of dropping them.
+        let appended: ConversationMessage[] = [];
+        if (snapshotLast) {
+            const idx = conv.messages.lastIndexOf(snapshotLast);
+            if (idx === -1) {
+                Log.warn("Skipping compaction: conversation changed too much while summarizing", { conversationId });
+                return;
+            }
+            appended = conv.messages.slice(idx + 1);
+        }
 
         const summaryMessage: ConversationMessage = {
             role: "assistant",
@@ -227,7 +241,7 @@ class ConversationManager {
         };
 
         const messages = conv.messages[0]?.role === "system" ? [conv.messages[0]] : [];
-        conv.messages = [...messages, summaryMessage, ...keepTail];
+        conv.messages = [...messages, summaryMessage, ...keepTail, ...appended];
         conv.updatedAt = Date.now();
         this.compactedAt.set(conversationId, conv.messages.length);
 

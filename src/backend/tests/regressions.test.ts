@@ -160,3 +160,19 @@ test("cancelling a chat stream closes the upstream LLM connection (dev H2)", asy
         await new Promise<void>(resolve => server.close(() => resolve()));
     }
 });
+
+test("messages added while compacting are kept (dev H3)", () => {
+    const conversation = conversationManager.create("client", crypto.randomUUID(), "system", "model");
+    for (let i = 0; i < 20; i++) {
+        conversationManager.addMessage(conversation.id, { role: "user", content: `message ${i}`, timestamp: Date.now() });
+    }
+    const plan = conversationManager.prepareCompact(conversation.id);
+    // A concurrent request appends while the summary is being generated.
+    conversationManager.addMessage(conversation.id, { role: "user", content: "late question", timestamp: Date.now() });
+    conversationManager.addMessage(conversation.id, { role: "assistant", content: "late answer", timestamp: Date.now() });
+    conversationManager.applyCompaction(conversation.id, "summary", plan.keepTail, plan.snapshotLast);
+
+    const contents = conversationManager.getMessages(conversation.id).map(m => m.content);
+    assert.deepEqual(contents.slice(-3), ["message 19", "late question", "late answer"]);
+    conversationManager.delete(conversation.id);
+});
