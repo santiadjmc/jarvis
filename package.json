@@ -47,7 +47,7 @@
     "nodemailer": "^10.0.15",
     "puppeteer": "^25.12.0",
     "redis": "^6.2.1",
-    "undici": "^8.12.3",
+    "undici": "^8.12.4",
     "uuid": "^14.0.3",
     "winston": "^3.19.0",
     "winston-daily-rotate-file": "^5.0.0",
