@@ -9,6 +9,7 @@ import deviceRegistry from "../server/ws/DeviceRegistry";
 import resultBroker from "../tools/ResultBroker";
 import fileTools from "../tools/implementations/fs";
 import { stripMarkup } from "../tools/implementations/web";
+import { isPrivateAddress } from "../utils/netguard";
 
 test("device ids are bound to the authenticating key; spoofed results are rejected (H3)", async () => {
     const deviceId = crypto.randomUUID();
@@ -140,5 +141,22 @@ test("fetch_url HTML stripping is linear-time and still strips markup (H4)", () 
         stripMarkup(payload, "text/html");
         const elapsed = Date.now() - started;
         assert.ok(elapsed < 1000, `stripMarkup took ${elapsed}ms on a ${payload.length}-char adversarial input`);
+    }
+});
+
+test("netguard blocks embedded/translated private IPv6 and reserved IPv4 ranges (sec L1)", () => {
+    const cases: Array<[string, boolean]> = [
+        ["::", true], ["::1", true], ["::127.0.0.1", true], ["::a9fe:a9fe", true],
+        ["::ffff:127.0.0.1", true], ["::ffff:7f00:1", true], ["::ffff:8.8.8.8", false],
+        ["64:ff9b::a9fe:a9fe", true], ["64:ff9b::169.254.169.254", true], ["64:ff9b::808:808", false], ["64:ff9b:1::1", true],
+        ["2002:7f00:1::", true], ["2002:a9fe:a9fe::1", true], ["2002:808:808::1", false],
+        ["2001::1", true], ["2001:0:4136:e378::1", true], ["2001:db8::1", true], ["100::1", true],
+        ["fec0::1", true], ["feff::1", true], ["fe80::1", true], ["fd00::1", true], ["ff02::1", true],
+        ["2606:4700:4700::1111", false], ["2001:4860:4860::8888", false],
+        ["192.88.99.1", true], ["198.51.100.7", true], ["203.0.113.9", true], ["10.0.0.1", true], ["8.8.8.8", false],
+        ["not-an-ip", true],
+    ];
+    for (const [address, expected] of cases) {
+        assert.equal(isPrivateAddress(address), expected, address);
     }
 });
