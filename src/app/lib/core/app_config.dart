@@ -12,10 +12,10 @@ class AppConfig {
     this.deviceId,
     this.deviceName,
     this.voiceReplies = true,
+    this.allowInsecureWs = false,
   });
 
   static const defaultHost = '';
-  static const schema = 'ws';
   static const heartbeatIntervalName = 'jarvis';
   static String? _storedDeviceId;
 
@@ -26,9 +26,10 @@ class AppConfig {
   final String? deviceName;
   final bool voiceReplies;
 
-  bool get isConfigured => apiKey != null && apiKey!.isNotEmpty && host.isNotEmpty;
+  /// Opt-in for plain `ws://` on a trusted LAN. When false, only `wss://` is used.
+  final bool allowInsecureWs;
 
-  String get wsUrl => '$schema://$host/ws?key=${Uri.encodeQueryComponent(apiKey ?? '')}';
+  bool get isConfigured => apiKey != null && apiKey!.isNotEmpty && host.isNotEmpty;
 
   String get effectiveDeviceId => deviceId ?? (_storedDeviceId ??= SettingsController._generateId());
 
@@ -53,6 +54,7 @@ class AppConfig {
     String? deviceId,
     String? deviceName,
     bool? voiceReplies,
+    bool? allowInsecureWs,
     bool clearKey = false,
   }) {
     return AppConfig(
@@ -62,6 +64,7 @@ class AppConfig {
       deviceId: deviceId ?? this.deviceId,
       deviceName: deviceName ?? this.deviceName,
       voiceReplies: voiceReplies ?? this.voiceReplies,
+      allowInsecureWs: allowInsecureWs ?? this.allowInsecureWs,
     );
   }
 }
@@ -73,6 +76,7 @@ class SettingsController extends Notifier<AppConfig> {
   static const _kDeviceId = 'jarvis.device_id';
   static const _kDeviceName = 'jarvis.device_name';
   static const _kVoiceReplies = 'jarvis.voice_replies';
+  static const _kAllowInsecureWs = 'jarvis.allow_insecure_ws';
   int _revision = 0;
 
   @override
@@ -98,6 +102,7 @@ class SettingsController extends Notifier<AppConfig> {
       deviceId: deviceId,
       deviceName: prefs.getString(_kDeviceName),
       voiceReplies: prefs.getBool(_kVoiceReplies) ?? true,
+      allowInsecureWs: prefs.getBool(_kAllowInsecureWs) ?? false,
     );
   }
 
@@ -107,6 +112,7 @@ class SettingsController extends Notifier<AppConfig> {
     String? model,
     String? deviceName,
     bool? voiceReplies,
+    bool? allowInsecureWs,
   }) async {
     _revision++;
     final cfg = state;
@@ -117,6 +123,7 @@ class SettingsController extends Notifier<AppConfig> {
       deviceId: cfg.deviceId,
       deviceName: deviceName ?? cfg.deviceName,
       voiceReplies: voiceReplies ?? cfg.voiceReplies,
+      allowInsecureWs: allowInsecureWs ?? cfg.allowInsecureWs,
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kHost, state.host);
@@ -124,6 +131,7 @@ class SettingsController extends Notifier<AppConfig> {
     if (model != null) await prefs.setString(_kModel, model);
     if (deviceName != null) await prefs.setString(_kDeviceName, deviceName);
     if (voiceReplies != null) await prefs.setBool(_kVoiceReplies, voiceReplies);
+    if (allowInsecureWs != null) await prefs.setBool(_kAllowInsecureWs, allowInsecureWs);
   }
 
   Future<void> clear() async {
@@ -134,6 +142,7 @@ class SettingsController extends Notifier<AppConfig> {
     await prefs.remove(_kModel);
     await prefs.remove(_kDeviceName);
     await prefs.remove(_kVoiceReplies);
+    await prefs.remove(_kAllowInsecureWs);
     AppConfig._storedDeviceId = null;
     state = const AppConfig();
   }

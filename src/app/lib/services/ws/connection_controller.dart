@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -13,6 +14,17 @@ import '../background/background_connection_service.dart';
 import '../device_tools/device_tool_executor.dart';
 
 enum ConnectionStatus { disconnected, connecting, connected, retrying }
+
+/// Thrown when the configured address would use plain `ws://` but the user has
+/// not enabled the "insecure LAN" opt-in.
+class InsecureTransportException implements Exception {
+  const InsecureTransportException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
 
 class ConnectionState {
   const ConnectionState({required this.status, this.errorMessage, this.latencyMs, this.hasConnectedOnce = false});
@@ -123,11 +135,23 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     _heartbeat?.cancel();
     _heartbeat = null;
     _closeSocket();
+    final Uri uri;
+    try {
+      uri = _webSocketUri(host, allowInsecure: ref.read(settingsControllerProvider).allowInsecureWs);
+    } on InsecureTransportException catch (e) {
+      // A configuration problem, not a network one: don't retry in a loop.
+      _connectTimer?.cancel();
+      _inactivityTimer?.cancel();
+      _connectResult?.complete(false);
+      _connectResult = null;
+      state = state.copyWith(status: ConnectionStatus.disconnected, errorMessage: e.message);
+      return;
+    }
     state = state.copyWith(status: ConnectionStatus.connecting, clearError: true);
     try {
-      final uri = _webSocketUri(host, apiKey);
-      debugPrint('Jarvis connecting to ${uri.replace(query: '').toString()}');
-      final channel = WebSocketChannel.connect(uri);
+      debugPrint('Jarvis connecting to $uri');
+      // The key travels in the Authorization header, never in the URL.
+      final channel = IOWebSocketChannel.connect(uri, headers: {'Authorization': 'Bearer $apiKey'});
       _channel = channel;
       channel.ready.then(
         (_) {},
@@ -149,21 +173,26 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     }
   }
 
-  Uri _webSocketUri(String host, String apiKey) {
+  /// Builds the socket URI. Defaults to `wss://`; plain `ws://` is only used
+  /// when [allowInsecure] (the "insecure LAN" setting) is on.
+  static Uri _webSocketUri(String host, {required bool allowInsecure}) {
     var value = host.trim();
     if (!RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://').hasMatch(value)) {
-      value = 'ws://$value';
+      value = '${allowInsecure ? 'ws' : 'wss'}://$value';
     }
     final parsed = Uri.parse(value);
     final scheme = switch (parsed.scheme.toLowerCase()) {
       'https' || 'wss' => 'wss',
-      _ => 'ws',
+      'http' || 'ws' => 'ws',
+      final other => throw InsecureTransportException('Unsupported server scheme "$other://". Use wss:// or https://.'),
     };
-    return parsed.replace(
-      scheme: scheme,
-      path: '/ws',
-      queryParameters: {...parsed.queryParameters, 'key': apiKey},
-    );
+    if (scheme == 'ws' && !allowInsecure) {
+      throw const InsecureTransportException(
+        'Refusing to connect over unencrypted ws://. Use a wss:// address, or enable '
+        '"Insecure LAN (ws://)" in settings if this server is on a trusted local network.',
+      );
+    }
+    return parsed.replace(scheme: scheme, path: '/ws');
   }
 
   void _failConnect(String message) {

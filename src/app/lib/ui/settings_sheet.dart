@@ -8,6 +8,7 @@ import '../core/app_config.dart';
 import '../protocol/jarvis_protocol.dart';
 import '../services/automation/system_assistant_service.dart';
 import '../services/ws/connection_controller.dart';
+import 'setup_screen.dart' show InsecureLanSwitch;
 import 'theme/jarvis_theme.dart';
 
 class SettingsSheet extends ConsumerStatefulWidget {
@@ -26,6 +27,7 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
   List<String> _availableModels = [];
   bool _assistantSupported = false;
   bool _isDefaultAssistant = false;
+  bool _allowInsecure = false;
 
   @override
   void initState() {
@@ -35,6 +37,7 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
     _keyController = TextEditingController(text: cfg.apiKey ?? '');
     _modelController = TextEditingController(text: cfg.model ?? '');
     _nameController = TextEditingController(text: cfg.deviceName ?? '');
+    _allowInsecure = cfg.allowInsecureWs;
     unawaited(_loadAssistantStatus());
 
     final connection = ref.read(connectionControllerProvider.notifier);
@@ -77,13 +80,17 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
       apiKey: key.isEmpty ? null : key,
       model: model.isEmpty ? null : model,
       deviceName: name.isEmpty ? null : name,
+      allowInsecureWs: _allowInsecure,
     );
 
     final connection = ref.read(connectionControllerProvider.notifier);
     final cfg = ref.read(settingsControllerProvider);
     final notConnected = ref.read(connectionControllerProvider).status != ConnectionStatus.connected;
     if (cfg.isConfigured &&
-        (previous.host != cfg.host || previous.apiKey != cfg.apiKey || notConnected)) {
+        (previous.host != cfg.host ||
+            previous.apiKey != cfg.apiKey ||
+            previous.allowInsecureWs != cfg.allowInsecureWs ||
+            notConnected)) {
       await connection.disconnect();
       await connection.connect(cfg.host, cfg.apiKey!);
     }
@@ -176,9 +183,14 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
             style: const TextStyle(color: JarvisColors.ink, fontFamily: JarvisType.mono, fontSize: 14),
             decoration: const InputDecoration(
               labelText: 'Server',
-              hintText: '192.168.1.2:3000',
+              hintText: 'jarvis.example.com:3000 (wss://)',
               prefixIcon: Icon(Icons.dns_outlined),
             ),
+          ),
+          const SizedBox(height: 6),
+          InsecureLanSwitch(
+            value: _allowInsecure,
+            onChanged: (value) => setState(() => _allowInsecure = value),
           ),
           const SizedBox(height: 12),
           TextField(

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is denied app-wide. The Jarvis socket uses wss:// by default.
+  The optional "Insecure LAN (ws://)" setting is implemented with dart:io sockets,
+  which Flutter does not route through this policy, so no cleartext exception is
+  granted here for it. Platform (Java/Kotlin) networking stays HTTPS-only.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

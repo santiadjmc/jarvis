@@ -17,6 +17,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   late final TextEditingController _keyController;
   late final TextEditingController _nameController;
   String? _validationError;
+  bool _allowInsecure = false;
 
   @override
   void initState() {
@@ -25,6 +26,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     _hostController = TextEditingController(text: cfg.host);
     _keyController = TextEditingController(text: cfg.apiKey ?? '');
     _nameController = TextEditingController(text: cfg.deviceName ?? '');
+    _allowInsecure = cfg.allowInsecureWs;
   }
 
   @override
@@ -39,12 +41,12 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     final host = _hostController.text.trim();
     final key = _keyController.text.trim();
     final name = _nameController.text.trim();
-    if (name.isNotEmpty) {
-      await ref.read(settingsControllerProvider.notifier).save(deviceName: name);
-    }
+    await ref
+        .read(settingsControllerProvider.notifier)
+        .save(deviceName: name.isEmpty ? null : name, allowInsecureWs: _allowInsecure);
     setState(() {
       _validationError = host.isEmpty
-          ? 'Enter the server address, e.g. 192.168.1.2:3000'
+          ? 'Enter the server address, e.g. jarvis.example.com:3000'
           : key.isEmpty
               ? 'Enter the API key'
               : null;
@@ -53,7 +55,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
     final ok = await ref.read(connectionControllerProvider.notifier).connect(host, key);
     if (mounted && !ok && ref.read(connectionControllerProvider).status != ConnectionStatus.retrying) {
-      setState(() => _validationError = 'Could not reach that server.');
+      setState(() => _validationError = ref.read(connectionControllerProvider).errorMessage ?? 'Could not reach that server.');
     }
   }
 
@@ -105,8 +107,13 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                   decoration: const InputDecoration(
                     labelText: 'Server',
                     prefixIcon: Icon(Icons.dns_outlined),
-                    hintText: '192.168.1.2:3000',
+                    hintText: 'jarvis.example.com:3000 (wss://)',
                   ),
+                ),
+                const SizedBox(height: 6),
+                InsecureLanSwitch(
+                  value: _allowInsecure,
+                  onChanged: (value) => setState(() => _allowInsecure = value),
                 ),
                 const SizedBox(height: 14),
                 TextField(
@@ -194,6 +201,31 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Opt-in for plain `ws://` on a trusted local network. Off by default.
+class InsecureLanSwitch extends StatelessWidget {
+  const InsecureLanSwitch({super.key, required this.value, required this.onChanged});
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      title: const Text('Insecure LAN (ws://)', style: TextStyle(fontSize: 14, color: JarvisColors.ink)),
+      subtitle: Text(
+        value
+            ? 'Unencrypted: your API key and messages can be read or altered by anyone on this network'
+            : 'Off: connects with encrypted wss:// only',
+        style: TextStyle(fontSize: 12, color: value ? JarvisColors.danger : JarvisColors.inkMuted),
+      ),
+      activeThumbColor: JarvisColors.danger,
+      value: value,
+      onChanged: onChanged,
     );
   }
 }
