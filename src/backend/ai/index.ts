@@ -663,7 +663,8 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
     async runProactiveTask(task: ScheduledTask): Promise<void> {
         const streamId = uuid();
         const model = modelManager.getActive();
-        const conversation = conversationManager.getOrCreate("proactive-scheduler", "proactive", this.PROACTIVE_SYSTEM_PROMPT, model);
+        // A fresh conversation per run, so unrelated scheduled tasks don't bleed into each other.
+        const conversation = conversationManager.create("proactive-scheduler", `proactive-${streamId}`, this.PROACTIVE_SYSTEM_PROMPT, model);
 
         conversationManager.addMessage(conversation.id, {
             role: "user",
@@ -744,6 +745,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             Log.error("Proactive task failed", err);
         } finally {
             markRan(task.id);
+            conversationManager.delete(conversation.id);
             this.reWarmFastAfterDeep(model);
         }
     }

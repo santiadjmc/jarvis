@@ -316,3 +316,19 @@ test("JARVIS_NUM_CTX caps the compaction context budget (dev M8)", () => {
         else process.env.JARVIS_NUM_CTX = previous;
     }
 });
+
+test("trimming at MAX_MESSAGES keeps the summary and drops orphaned tool results (dev M9)", () => {
+    const conversation = conversationManager.create("client", crypto.randomUUID(), "system", "model");
+    conversationManager.applyCompaction(conversation.id, "summary", []);
+    for (let i = 0; i < 100; i++) {
+        conversationManager.addMessage(conversation.id, i % 2 === 0
+            ? { role: "assistant", content: "", timestamp: Date.now(), toolCalls: [{ id: `c${i}`, type: "function", function: { name: "t", arguments: {} } }] }
+            : { role: "tool", content: "{}", timestamp: Date.now(), tool_call_id: `c${i - 1}` });
+        const messages = conversationManager.getMessages(conversation.id);
+        assert.ok(messages.length <= 80);
+        assert.equal(messages[0].role, "system");
+        assert.match(messages[1].content, /^\[Conversation summary so far\]/);
+        assert.notEqual(messages[2]?.role, "tool");
+    }
+    conversationManager.delete(conversation.id);
+});

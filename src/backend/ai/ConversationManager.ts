@@ -81,8 +81,17 @@ class ConversationManager {
         conv.updatedAt = Date.now();
 
         if (conv.messages.length > this.MAX_MESSAGES) {
-            const systemMsg = conv.messages[0];
-            conv.messages = [systemMsg, ...conv.messages.slice(-this.MAX_MESSAGES + 1)];
+            // Keep the system prompt and the compaction summary pinned, and never
+            // start the kept tail with orphaned tool results.
+            const head: ConversationMessage[] = [];
+            let i = 0;
+            if (conv.messages[i]?.role === "system") head.push(conv.messages[i++]);
+            if (conv.messages[i]?.role === "assistant" && conv.messages[i].content.startsWith("[Conversation summary so far]")) {
+                head.push(conv.messages[i++]);
+            }
+            let tail = conv.messages.slice(-(this.MAX_MESSAGES - head.length));
+            while (tail.length > 0 && tail[0].role === "tool") tail = tail.slice(1);
+            conv.messages = [...head, ...tail];
         }
     }
 
