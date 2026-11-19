@@ -167,14 +167,13 @@ class ChatMessage {
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
         id: json['id'] as String,
-        role: MessageRole.values.firstWhere((r) => r.name == json['role']),
+        role: MessageRole.values.asNameMap()[json['role']] ??
+            (throw FormatException('Unknown message role: ${json['role']}')),
         content: json['content'] as String? ?? '',
         thinking: json['thinking'] as String? ?? '',
         complete: json['complete'] as bool? ?? true,
         model: json['model'] as String?,
-        status: json['status'] is String
-            ? ChatStatus.values.firstWhere((s) => s.name == json['status'])
-            : null,
+        status: json['status'] is String ? ChatStatus.values.asNameMap()[json['status']] : null,
         errorMessage: json['errorMessage'] as String?,
         tools: (json['tools'] as List<dynamic>? ?? [])
             .map((t) => ToolStep.fromJson(t as Map<String, dynamic>))
@@ -269,9 +268,15 @@ class ChatController extends Notifier<ChatState> {
       if (raw.trim().isEmpty) return;
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
       final loadedId = decoded['sessionId'] as String?;
-      final loaded = (decoded['messages'] as List<dynamic>? ?? [])
-          .map((m) => ChatMessage.fromJson(m as Map<String, dynamic>))
-          .toList();
+      // Skip individual bad entries instead of discarding the whole history.
+      final loaded = <ChatMessage>[];
+      for (final m in decoded['messages'] as List<dynamic>? ?? const []) {
+        try {
+          loaded.add(ChatMessage.fromJson(m as Map<String, dynamic>));
+        } catch (e) {
+          debugPrint('Jarvis: skipping unreadable history entry: $e');
+        }
+      }
       if (loaded.isEmpty) return;
       // Frames may have arrived while the file was read: merge history in
       // front of them instead of replacing them.
