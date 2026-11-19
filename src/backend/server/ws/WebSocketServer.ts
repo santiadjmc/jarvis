@@ -24,7 +24,8 @@ class JarvisWebSocketServer {
             .map(o => o.trim())
             .filter(Boolean);
         if (configured.includes("*")) return true;
-        if (configured.includes(origin)) return true;
+        // Match the HTTP CORS policy: an explicit list replaces the localhost default.
+        if (configured.length > 0) return configured.includes(origin);
         return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin);
     }
 

@@ -274,3 +274,18 @@ test("ping_host and check_port refuse private targets and option-like hosts (sec
         if (previous !== undefined) process.env.JARVIS_FETCH_ALLOW_PRIVATE = previous;
     }
 });
+
+test("WS origin allow-list matches the HTTP CORS policy (sec L7)", () => {
+    const previous = process.env.CORS_ORIGINS;
+    try {
+        delete process.env.CORS_ORIGINS;
+        assert.equal((wsServer as any).originAllowed("http://localhost:5173"), true);
+        assert.equal((wsServer as any).originAllowed("https://evil.example"), false);
+        process.env.CORS_ORIGINS = "https://app.example";
+        assert.equal((wsServer as any).originAllowed("https://app.example"), true);
+        assert.equal((wsServer as any).originAllowed("http://localhost:5173"), false);
+    } finally {
+        if (previous === undefined) delete process.env.CORS_ORIGINS;
+        else process.env.CORS_ORIGINS = previous;
+    }
+});
