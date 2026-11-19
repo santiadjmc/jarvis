@@ -72,6 +72,12 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   /// Tool results / approvals that could not be sent (socket down or
   /// reconnecting), keyed by frame type + callId so each call is sent once.
   /// Flushed after the next device_hello.
+  ///
+  /// This relies on the server keeping device results open for a short grace
+  /// window after a disconnect (15 s) and matching replayed results and
+  /// approvals by device id + API key rather than connection id. Older servers
+  /// drop them after a reconnect, so the queue only helps against a server
+  /// with that change.
   final Map<String, String> _outbox = {};
   static const _outboxLimit = 100;
   bool _helloSent = false;
