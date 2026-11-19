@@ -82,6 +82,10 @@ class SettingsController extends Notifier<AppConfig> {
   static const _kVoiceReplies = 'jarvis.voice_replies';
   static const _kAllowInsecureWs = 'jarvis.allow_insecure_ws';
   static const _secureStorage = FlutterSecureStorage();
+
+  /// A locked or missing keyring (mostly Linux/libsecret) can block for the
+  /// D-Bus timeout or wait on an unlock prompt; don't let that hold up startup.
+  static const _secureStorageTimeout = Duration(seconds: 3);
   int _revision = 0;
   final Completer<void> _loaded = Completer<void>();
 
@@ -121,9 +125,12 @@ class SettingsController extends Notifier<AppConfig> {
       await prefs.setBool(_kAllowInsecureWs, migrated);
     }
     if (revision != _revision) return;
+    final apiKey = await _readApiKey(prefs);
+    // The keystore read can take a while; don't clobber a save() made meanwhile.
+    if (revision != _revision) return;
     state = AppConfig(
       host: host ?? AppConfig.defaultHost,
-      apiKey: await _readApiKey(prefs),
+      apiKey: apiKey,
       model: prefs.getString(_kModel),
       deviceId: deviceId,
       deviceName: prefs.getString(_kDeviceName),
@@ -166,7 +173,7 @@ class SettingsController extends Notifier<AppConfig> {
     await prefs.remove(_kHost);
     await prefs.remove(_kKey);
     try {
-      await _secureStorage.delete(key: _kKey);
+      await _secureStorage.delete(key: _kKey).timeout(_secureStorageTimeout);
     } catch (e) {
       debugPrint('Jarvis: could not clear API key from secure storage: $e');
     }
@@ -183,14 +190,18 @@ class SettingsController extends Notifier<AppConfig> {
   static Future<String?> _readApiKey(SharedPreferences prefs) async {
     final legacy = prefs.getString(_kKey);
     try {
-      final stored = await _secureStorage.read(key: _kKey);
       if (legacy != null) {
-        if (stored == null) await _secureStorage.write(key: _kKey, value: legacy);
+        // A key in preferences is either from an old version or was written
+        // there because the keystore was unavailable at the time; either way
+        // it's the newest one, so move it over.
+        await _secureStorage.write(key: _kKey, value: legacy).timeout(_secureStorageTimeout);
         await prefs.remove(_kKey);
+        return legacy;
       }
-      return stored ?? legacy;
+      return await _secureStorage.read(key: _kKey).timeout(_secureStorageTimeout);
     } catch (e) {
-      // No usable keystore (e.g. Linux without a secret service): keep the old behaviour.
+      // No usable keystore (e.g. Linux without a secret service, or a locked
+      // keyring that timed out): keep the old behaviour.
       debugPrint('Jarvis: secure storage unavailable, using preferences: $e');
       return legacy;
     }
@@ -198,7 +209,7 @@ class SettingsController extends Notifier<AppConfig> {
 
   static Future<void> _writeApiKey(SharedPreferences prefs, String apiKey) async {
     try {
-      await _secureStorage.write(key: _kKey, value: apiKey);
+      await _secureStorage.write(key: _kKey, value: apiKey).timeout(_secureStorageTimeout);
       await prefs.remove(_kKey);
     } catch (e) {
       debugPrint('Jarvis: secure storage unavailable, using preferences: $e');
