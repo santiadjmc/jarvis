@@ -19,7 +19,7 @@ function isPrivateIPv4(address: string): boolean {
         (a === 169 && b === 254) ||
         (a === 172 && b >= 16 && b <= 31) ||
         (a === 192 && b === 168) ||
-        (a === 192 && b === 0) ||
+        (a === 192 && b === 0 && (c === 0 || c === 2)) || // IETF special-purpose /24 and TEST-NET-1, not the rest of 192.0/16
         (a === 192 && b === 88 && c === 99) ||
         (a === 198 && (b === 18 || b === 19)) ||
         (a === 198 && b === 51 && c === 100) ||

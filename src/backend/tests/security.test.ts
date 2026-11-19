@@ -160,6 +160,9 @@ test("netguard blocks embedded/translated private IPv6 and reserved IPv4 ranges 
         ["fec0::1", true], ["feff::1", true], ["fe80::1", true], ["fd00::1", true], ["ff02::1", true],
         ["2606:4700:4700::1111", false], ["2001:4860:4860::8888", false],
         ["192.88.99.1", true], ["198.51.100.7", true], ["203.0.113.9", true], ["10.0.0.1", true], ["8.8.8.8", false],
+        ["192.0.0.8", true], ["192.0.2.1", true],
+        // The rest of 192.0.0.0/16 is ordinary public space (e.g. WordPress.com).
+        ["192.0.78.9", false], ["192.0.66.2", false],
         ["not-an-ip", true],
     ];
     for (const [address, expected] of cases) {
