@@ -13,6 +13,8 @@ import networkTools from "../tools/implementations/network";
 import { stripMarkup } from "../tools/implementations/web";
 import { guardedFetch, isPrivateAddress, resolvePublicAddress } from "../utils/netguard";
 import { checkBrowserRequestUrl } from "../agent/Browser/browserSession";
+import Server from "../server";
+import { consumeConnectToken, issueConnectToken } from "../agent/Google/googleAuth";
 
 test("device ids are bound to the authenticating key; spoofed results are rejected (H3)", async () => {
     const deviceId = crypto.randomUUID();
@@ -288,4 +290,24 @@ test("WS origin allow-list matches the HTTP CORS policy (sec L7)", () => {
         if (previous === undefined) delete process.env.CORS_ORIGINS;
         else process.env.CORS_ORIGINS = previous;
     }
+});
+
+test("Google OAuth start needs loopback or a one-time token (dev M6)", async () => {
+    const token = issueConnectToken();
+    assert.equal(consumeConnectToken(token), true);
+    assert.equal(consumeConnectToken(token), false, "tokens are single-use");
+    assert.equal(consumeConnectToken("forged"), false);
+
+    // Loopback requests still work (server-side browser flow).
+    const app = new Server(0, "127.0.0.1") as any;
+    const handler = app.app.router.stack.find((l: any) => l.route?.path === "/oauth/google/start").route.stack[0].handle;
+    const run = (remoteAddress: string, query: Record<string, string>) => new Promise<number>((resolve) => {
+        const res: any = { statusCode: 200, status(c: number) { this.statusCode = c; return this; }, send() { resolve(this.statusCode); }, redirect() { resolve(302); } };
+        handler({ socket: { remoteAddress }, query }, res);
+    });
+    assert.equal(await run("192.168.1.50", {}), 403);
+    assert.equal(await run("192.168.1.50", { token: "forged" }), 403);
+    const fresh = issueConnectToken();
+    assert.notEqual(await run("192.168.1.50", { token: fresh }), 403);
+    assert.notEqual(await run("127.0.0.1", {}), 403);
 });

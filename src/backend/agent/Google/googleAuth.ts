@@ -65,6 +65,30 @@ function buildOAuthClient(): OAuth2Client {
 
 let pendingState: string | null = null;
 
+const CONNECT_TOKEN_TTL_MS = 10 * 60 * 1000;
+const connectTokens = new Map<string, number>();
+
+/**
+ * One-time token that authorizes a non-loopback browser to start the Google
+ * OAuth flow. Issued only over an authenticated WS connection.
+ */
+export function issueConnectToken(): string {
+    const now = Date.now();
+    for (const [token, expiresAt] of connectTokens) {
+        if (expiresAt <= now) connectTokens.delete(token);
+    }
+    const token = randomBytes(24).toString("base64url");
+    connectTokens.set(token, now + CONNECT_TOKEN_TTL_MS);
+    return token;
+}
+
+export function consumeConnectToken(token: string): boolean {
+    const expiresAt = connectTokens.get(token);
+    if (expiresAt === undefined) return false;
+    connectTokens.delete(token);
+    return expiresAt > Date.now();
+}
+
 export function isConfigured(): boolean {
     return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.env.GOOGLE_REDIRECT_URI);
 }

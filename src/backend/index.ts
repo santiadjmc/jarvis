@@ -17,7 +17,7 @@ import cacheManager from "./managers/CacheManager";
 import ttsService from "./voice/TtsService";
 import { listDueTasks } from "./agent/Scheduler/taskStore";
 import { isAutoApproveEnabled, setAutoApprove } from "./agent/runtimeConfig";
-import { status as googleStatus, isConfigured as googleConfigured } from "./agent/Google/googleAuth";
+import { status as googleStatus, isConfigured as googleConfigured, issueConnectToken } from "./agent/Google/googleAuth";
 import { getLocalAddresses } from "./utils/network";
 import { closeBrowser } from "./agent/Browser/browserSession";
 import type { AuthenticatedClient } from "./types/ws";
@@ -272,6 +272,13 @@ function handleConfigMessage(client: AuthenticatedClient, message: { id: string;
                 break;
             case "autoApprove":
                 value = isAutoApproveEnabled();
+                break;
+            case "googleConnectUrl":
+                if (!authService.hasPermission(client.apiKeyId, "config:write")) {
+                    sendConfigError(client, message.id, "PERMISSION_DENIED", "Connecting a Google account requires config:write.");
+                    return;
+                }
+                value = `/oauth/google/start?token=${issueConnectToken()}`;
                 break;
             default:
                 sendConfigError(client, message.id, "UNKNOWN_CONFIG", `Unknown config key: ${message.key}`);

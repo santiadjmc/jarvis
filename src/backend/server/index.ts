@@ -4,7 +4,7 @@ import { createServer, type Server as HTTPServer } from "http";
 import wsServer from "./ws/WebSocketServer";
 import connectionManager from "./ws/ConnectionManager";
 import { getLocalAddresses } from "../utils/network";
-import { getAuthUrl, handleCallback, isConfigured } from "../agent/Google/googleAuth";
+import { consumeConnectToken, getAuthUrl, handleCallback, isConfigured } from "../agent/Google/googleAuth";
 import Log from "../Log";
 
 class Server {
@@ -66,7 +66,15 @@ class Server {
             });
         });
 
-        this.app.get("/oauth/google/start", (_, res) => {
+        this.app.get("/oauth/google/start", (req, res) => {
+            // Starting the flow replaces the connected Google account, so it needs
+            // either a request from this machine or a one-time token issued to an
+            // authenticated client (config key "googleConnectUrl").
+            const token = typeof req.query.token === "string" ? req.query.token : "";
+            if (!isLoopback(req.socket.remoteAddress) && !(token && consumeConnectToken(token))) {
+                res.status(403).send(oauthPage("Not authorized", "Open this link on the Jarvis server itself, or request a one-time connect link from the Jarvis app."));
+                return;
+            }
             if (!isConfigured()) {
                 res.status(500).send(oauthPage("Google OAuth isn't configured", "Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI in the server's .env file first."));
                 return;
@@ -132,6 +140,10 @@ class Server {
     getHttpServer(): HTTPServer | null {
         return this.httpServer;
     }
+}
+
+function isLoopback(address: string | undefined): boolean {
+    return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
 function oauthPage(title: string, message: string): string {
