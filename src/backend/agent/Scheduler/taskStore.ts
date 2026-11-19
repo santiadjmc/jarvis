@@ -42,6 +42,10 @@ export function listDueTasks(now: number = Date.now()): ScheduledTask[] {
 
 export function addTask(instructions: string, dueAt: number, recurringEveryMs: number | null = null): ScheduledTask {
     const data = load();
+    if (data.tasks.length >= MAX_TASKS) {
+        // Previously the new task was silently dropped while reported as created.
+        throw new Error(`Too many scheduled tasks (max ${MAX_TASKS}). Cancel one before adding another.`);
+    }
     const task: ScheduledTask = {
         id: uuid(),
         instructions,
@@ -51,9 +55,6 @@ export function addTask(instructions: string, dueAt: number, recurringEveryMs: n
         lastRunAt: null,
     };
     data.tasks.push(task);
-    if (data.tasks.length > MAX_TASKS) {
-        data.tasks = data.tasks.sort((a, b) => a.dueAt - b.dueAt).slice(0, MAX_TASKS);
-    }
     save(data);
     return task;
 }
