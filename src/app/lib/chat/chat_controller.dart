@@ -414,7 +414,8 @@ class ChatController extends Notifier<ChatState> {
   ChatMessage _ensureBubble(String requestId, {bool proactive = false, bool subagent = false}) {
     final existing = _bubble(requestId);
     if (existing != null) return existing;
-    if (!proactive) _activeRequestId ??= requestId;
+    // _activeRequestId is only ever set by send(): server-initiated requests
+    // (scheduled tasks, subagents) must not lock the composer.
     final bubble = ChatMessage(id: requestId, role: MessageRole.assistant, proactive: proactive, subagent: subagent);
     _messages = [..._messages, bubble];
     state = state.copyWith(messages: _messages);
