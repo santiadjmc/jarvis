@@ -89,6 +89,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
         _connectTimer?.cancel();
         _inactivityTimer?.cancel();
         _manualClose = true;
+        _closeSocket();
         _messages.close();
       });
     });
