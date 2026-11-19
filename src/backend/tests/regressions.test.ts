@@ -366,3 +366,28 @@ test("invalid compaction env values fall back to defaults (dev L7)", () => {
         }
     }
 });
+
+test("streamed tool calls are kept when the server sends no finish_reason (dev L9)", async () => {
+    const http = await import("node:http");
+    const server = http.createServer((req, res) => {
+        req.resume();
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "get_time", arguments: "{}" } }] } }] })}\n\n`);
+        res.end("data: [DONE]\n\n");
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const client = llmClient as any;
+    const previousBase = client.baseUrl;
+    client.baseUrl = `http://127.0.0.1:${(server.address() as import("node:net").AddressInfo).port}/v1`;
+    try {
+        const calls: any[] = [];
+        for await (const chunk of llmClient.chatStream({ model: "m", messages: [], stream: true })) {
+            if (chunk.toolCalls) calls.push(...chunk.toolCalls);
+        }
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].function.name, "get_time");
+    } finally {
+        client.baseUrl = previousBase;
+        await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+});

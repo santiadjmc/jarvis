@@ -115,6 +115,7 @@ class LLMClient {
         const decoder = new TextDecoder();
         let buffer = "";
         const pendingCalls = new Map<number, PendingToolCall>();
+        let emittedToolCalls = false;
 
         // Cancel the body when the consumer stops early (break/return) or the
         // request is aborted, so the backend stops generating.
@@ -162,12 +163,17 @@ class LLMClient {
                     const result: ChatStreamChunk = { content, thinking, done: false };
                     if (finished && pendingCalls.size > 0) {
                         result.toolCalls = finalizeToolCalls(pendingCalls);
+                        emittedToolCalls = true;
                     }
 
                     if (content || thinking || result.toolCalls) {
                         yield result;
                     }
                 }
+            }
+            // Some servers end with [DONE] and never send a finish_reason.
+            if (!emittedToolCalls && pendingCalls.size > 0 && !options.signal?.aborted) {
+                yield { content: "", thinking: "", done: false, toolCalls: finalizeToolCalls(pendingCalls) };
             }
         } finally {
             reader.cancel().catch(() => {});
