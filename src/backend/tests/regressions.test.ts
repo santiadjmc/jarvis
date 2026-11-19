@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import conversationManager from "../ai/ConversationManager";
 import toolRegistry from "../tools/registry";
-import { decideRestart } from "../ProcessManager";
+import ProcessManager, { decideRestart } from "../ProcessManager";
 import aiOrchestrator from "../ai";
 import { addTask, listTasks } from "../agent/Scheduler/taskStore";
 import llmClient, { finalizeToolCalls } from "../ai/LLMClient";
@@ -245,4 +245,32 @@ test("restart limit forgives crashes older than the restart window (dev M5)", ()
     };
     assert.equal(decideRestart({ ...base, elapsedSinceLastCrash: 7_200_000 }).restart, true);
     assert.equal(decideRestart({ ...base, elapsedSinceLastCrash: 60_000 }).restart, false);
+});
+
+test("SIGTERM during a restart window shuts down instead of spawning a new child (dev M4)", async () => {
+    const pm = Object.create(ProcessManager.prototype) as any;
+    Object.assign(pm, {
+        child: { pid: undefined, once: () => {}, kill: () => {} },
+        isShuttingDown: false, isRestarting: false, restartPending: false,
+        restartTimer: null, restartKillTimer: null,
+        options: { autoRestart: true },
+    });
+    let started = 0;
+    let finished = 0;
+    pm.log = () => {};
+    pm.setState = () => {};
+    pm.killChild = () => {};
+    pm.start = () => { started++; };
+    pm.finishShutdown = () => { finished++; };
+
+    pm.restart("test");
+    assert.equal(pm.isShuttingDown, false);
+    assert.ok(pm.restartKillTimer, "restart scheduled");
+
+    pm.child = null; // child exited from the restart SIGTERM
+    pm.shutdown("SIGTERM");
+    assert.equal(finished, 1, "shutdown is honoured during the restart window");
+    assert.equal(pm.restartKillTimer, null);
+    await new Promise(r => setTimeout(r, 50));
+    assert.equal(started, 0);
 });

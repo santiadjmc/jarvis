@@ -95,6 +95,8 @@ export default class ProcessManager {
     private child: ChildProcess | null = null;
     private restartCount = 0;
     private isShuttingDown = false;
+    private isRestarting = false;
+    private restartKillTimer: NodeJS.Timeout | null = null;
     private lastCrashTime = 0;
     private lastRestartScheduled = 0;
     private restartPending = false;
@@ -159,6 +161,7 @@ export default class ProcessManager {
     }
 
     public start(): void {
+        if (this.isShuttingDown) return;
         if (this.child) {
             this.log("Process already running");
             return;
@@ -215,7 +218,7 @@ export default class ProcessManager {
             this.log(`Process spawn error: ${error.message}`);
             if (this.child === child) this.child = null;
             this.processStartTime = 0;
-            if (this.isShuttingDown || !this.options.autoRestart) {
+            if (this.isShuttingDown || this.isRestarting || !this.options.autoRestart) {
                 this.setState("stopped");
                 return;
             }
@@ -249,7 +252,7 @@ export default class ProcessManager {
         const decision = decideRestart({
             code,
             signal,
-            isShuttingDown: this.isShuttingDown,
+            isShuttingDown: this.isShuttingDown || this.isRestarting,
             autoRestart: this.options.autoRestart,
             stopOnCleanExit: this.options.stopOnCleanExit,
             restartCount: this.restartCount,
@@ -282,24 +285,31 @@ export default class ProcessManager {
 
     public restart(reason?: string): void {
         this.log(`Restart requested${reason ? ": " + reason : ""}`);
+        if (this.isShuttingDown) {
+            this.log("Shutdown in progress. Ignoring restart request.");
+            return;
+        }
         if (this.restartPending) {
             this.log("Restart already pending. Ignoring request.");
             return;
         }
         this.restartPending = true;
         if (this.child) {
-            this.isShuttingDown = true;
+            // A separate flag from isShuttingDown so a real SIGTERM/SIGINT arriving
+            // in this window is still honoured by shutdown().
+            this.isRestarting = true;
             this.setState("restarting");
             this.killChild("SIGTERM");
-            setTimeout(() => {
+            this.restartKillTimer = setTimeout(() => {
+                this.restartKillTimer = null;
                 if (this.child) {
                     this.log("Force killing process group...");
                     this.killChild("SIGKILL");
                 }
-                this.isShuttingDown = false;
+                this.isRestarting = false;
                 this.child = null;
                 this.restartPending = false;
-                setTimeout(() => this.start(), 1000);
+                this.restartTimer = setTimeout(() => { this.restartTimer = null; this.start(); }, 1000);
             }, 5000);
         } else {
             this.restartPending = false;
@@ -332,6 +342,11 @@ export default class ProcessManager {
         if (this.isShuttingDown) return;
         this.log(`Shutdown requested${signal ? ` (${signal})` : ""}`);
         this.isShuttingDown = true;
+        // Cancel any pending restart so no new child is spawned after this.
+        if (this.restartKillTimer) { clearTimeout(this.restartKillTimer); this.restartKillTimer = null; }
+        if (this.restartTimer) { clearTimeout(this.restartTimer); this.restartTimer = null; }
+        this.isRestarting = false;
+        this.restartPending = false;
         this.setState("shuttingDown");
         if (this.child) {
             this.killChild("SIGTERM");
