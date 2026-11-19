@@ -7,6 +7,7 @@ import messageRouter from "../server/ws/MessageRouter";
 import authService from "../auth/AuthService";
 import deviceRegistry from "../server/ws/DeviceRegistry";
 import resultBroker from "../tools/ResultBroker";
+import fileTools from "../tools/implementations/fs";
 
 test("device ids are bound to the authenticating key; spoofed results are rejected (H3)", async () => {
     const deviceId = crypto.randomUUID();
@@ -30,6 +31,41 @@ test("device ids are bound to the authenticating key; spoofed results are reject
     assert.equal(deviceRegistry.upsert(newConn, info, "key-victim"), true);
     deviceRegistry.onClientDisconnect(newConn);
     deviceRegistry.onClientDisconnect(victimConn);
+});
+
+test("read_file / grep_files refuse secrets and paths outside allowed roots (H1)", async () => {
+    const { mkdtemp, writeFile, mkdir, symlink, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const readTool = fileTools.find(t => t.name === "read_file")!;
+    const grepTool = fileTools.find(t => t.name === "grep_files")!;
+    const ctx = { clientId: "t", requestId: "t" };
+
+    const root = await mkdtemp(join(tmpdir(), "jarvis-fsguard-"));
+    const previous = process.env.JARVIS_FS_ROOTS;
+    process.env.JARVIS_FS_ROOTS = root;
+    try {
+        await writeFile(join(root, "notes.txt"), "hello SECRET_MARKER world");
+        await writeFile(join(root, ".env"), "JARVIS_MASTER_KEY=SECRET_MARKER");
+        await mkdir(join(root, ".ssh"));
+        await writeFile(join(root, ".ssh", "id_ed25519"), "SECRET_MARKER");
+        await symlink(join(root, ".env"), join(root, "innocent.txt"));
+
+        assert.equal((await readTool.execute({ path: join(root, "notes.txt") }, ctx)).success, true);
+        for (const p of [join(root, ".env"), join(root, ".ssh", "id_ed25519"), join(root, "innocent.txt"), "/proc/self/environ", "/etc/hostname"]) {
+            const r = await readTool.execute({ path: p }, ctx);
+            assert.equal(r.success, false, `expected ${p} to be refused`);
+        }
+
+        const grep = await grepTool.execute({ path: root, pattern: "SECRET_MARKER" }, ctx);
+        assert.equal(grep.success, true);
+        const paths = (grep.data as any).matches.map((m: any) => m.path);
+        assert.deepEqual(paths, [join(root, "notes.txt")]);
+    } finally {
+        if (previous === undefined) delete process.env.JARVIS_FS_ROOTS;
+        else process.env.JARVIS_FS_ROOTS = previous;
+        await rm(root, { recursive: true, force: true });
+    }
 });
 
 test("chat requires chat:send permission (M1)", async () => {

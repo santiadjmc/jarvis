@@ -160,6 +160,7 @@ All configuration lives in environment variables. See [`.env.example`](.env.exam
 | `JARVIS_DEVICE_TOOLS` | Allow/deny device tools. |
 | `JARVIS_AUTO_APPROVE` | `1` to skip approval prompts for risky tools. |
 | `JARVIS_DATA_DIR` | Where memory, tasks, and calendar JSON live. Defaults to `~/.local/share/jarvis`. |
+| `JARVIS_FS_ROOTS` | Comma-separated roots the read-only file tools may access. Defaults to `$HOME`, the working directory and the temp dir; secrets (`.env`, `~/.ssh`, keys, the data dir, `/proc`) are always refused. |
 | `JARVIS_FETCH_ALLOW_PRIVATE` | `1` lets `fetch_url` reach private/loopback addresses. Off by default. |
 | `TTS_*` | Piper binary, voice, model directory, and speed. |
 | `GOOGLE_*` | OAuth client for Google tools. |

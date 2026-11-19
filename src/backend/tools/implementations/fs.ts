@@ -1,6 +1,7 @@
 import { readdir, readFile, writeFile, unlink, mkdir, stat, rename, copyFile, appendFile } from "fs/promises";
 import { join, resolve, isAbsolute, basename, dirname } from "path";
 import type { ToolContext, ToolResult, ToolSpec } from "../types";
+import { assertReadablePath, isReadablePath } from "../../utils/fsguard";
 
 const MAX_READ_BYTES = 65536;
 const SKIP_DIR_NAMES = new Set(["node_modules", ".git", ".dart_tool", "build", "dist", ".cache"]);
@@ -30,7 +31,7 @@ async function scanDir(path: string, depth: number, limit: number, out: DirEntry
             } catch {}
         }
         out.push({ name: entry.name, type, size });
-        if (type === "dir" && depth > 0) {
+        if (type === "dir" && depth > 0 && await isReadablePath(join(path, entry.name))) {
             await scanDir(join(path, entry.name), depth - 1, limit, out);
         }
     }
@@ -55,6 +56,11 @@ const listDir: ToolSpec = {
         const target = isAbsolute(raw) ? resolve(raw) : resolve(process.cwd(), raw);
         const depth = Math.max(0, Math.min(3, Number(params.depth ?? 0)));
         const limit = Math.max(1, Math.min(500, Number(params.limit ?? 200)));
+        try {
+            await assertReadablePath(target);
+        } catch (err: any) {
+            return { success: false, data: null, error: err.message };
+        }
         const out: DirEntry[] = [];
         await scanDir(target, depth, limit, out);
         return { success: true, data: { path: target, entries: out, truncated: out.length >= limit } };
@@ -79,9 +85,10 @@ const readFileTool: ToolSpec = {
         if (!raw) return { success: false, data: null, error: "path is required" };
         const target = isAbsolute(raw) ? resolve(raw) : resolve(process.cwd(), raw);
         try {
-            const info = await stat(target);
+            const real = await assertReadablePath(target);
+            const info = await stat(real);
             if (info.isDirectory()) return { success: false, data: null, error: `${target} is a directory` };
-            const handle = await readFile(target, "utf-8");
+            const handle = await readFile(real, "utf-8");
             const truncated = handle.length > MAX_READ_BYTES;
             return {
                 success: true,
@@ -253,6 +260,7 @@ async function walk(dir: string, maxDepth: number, visit: (path: string, depth: 
     for (const entry of entries) {
         if (entry.isDirectory()) {
             if (SKIP_DIR_NAMES.has(entry.name)) continue;
+            if (!await isReadablePath(join(dir, entry.name))) continue;
             await walk(join(dir, entry.name), maxDepth, visit, depth + 1);
         } else if (entry.isFile()) {
             const keepGoing = await visit(join(dir, entry.name), depth);
@@ -285,9 +293,15 @@ const searchFiles: ToolSpec = {
         const maxDepth = Math.max(0, Math.min(12, Number(params.maxDepth ?? 6)));
         const limit = Math.max(1, Math.min(500, Number(params.limit ?? 100)));
 
+        try {
+            await assertReadablePath(root);
+        } catch (err: any) {
+            return { success: false, data: null, error: err.message };
+        }
+
         const matches: string[] = [];
         await walk(root, maxDepth, async (path) => {
-            if (basename(path).toLowerCase().includes(query)) matches.push(path);
+            if (basename(path).toLowerCase().includes(query) && await isReadablePath(path)) matches.push(path);
             return matches.length < limit;
         });
 
@@ -320,9 +334,16 @@ const grepFiles: ToolSpec = {
         const maxDepth = Math.max(0, Math.min(12, Number(params.maxDepth ?? 6)));
         const limit = Math.max(1, Math.min(500, Number(params.limit ?? 100)));
 
+        try {
+            await assertReadablePath(root);
+        } catch (err: any) {
+            return { success: false, data: null, error: err.message };
+        }
+
         const matches: Array<{ path: string; line: number; text: string }> = [];
         await walk(root, maxDepth, async (path) => {
             try {
+                if (!await isReadablePath(path)) return matches.length < limit;
                 const info = await stat(path);
                 if (info.size > 2 * 1024 * 1024) return matches.length < limit;
                 const content = await readFile(path, "utf-8");
