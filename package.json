@@ -32,7 +32,7 @@
   },
   "homepage": "https://github.com/santiadjmc/jarvis#readme",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.19"
   },
   "type": "commonjs",
   "dependencies": {

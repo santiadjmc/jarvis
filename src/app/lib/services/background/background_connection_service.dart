@@ -62,8 +62,13 @@ class BackgroundConnectionService {
     );
   }
 
+  static bool _permissionsRequested = false;
+
+  /// Asks for the notification permission at most once per app run, instead of
+  /// re-prompting on every reconnect.
   static Future<void> requestPermissions() async {
-    if (!_supported) return;
+    if (!_supported || _permissionsRequested) return;
+    _permissionsRequested = true;
     final permission = await FlutterForegroundTask.checkNotificationPermission();
     if (permission != NotificationPermission.granted) {
       await FlutterForegroundTask.requestNotificationPermission();

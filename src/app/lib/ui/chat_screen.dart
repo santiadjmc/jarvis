@@ -673,7 +673,9 @@ class _ComposerState extends ConsumerState<_Composer> {
     final text = _controller.text;
     if (text.trim().isEmpty) return;
     final model = ref.read(settingsControllerProvider).model;
-    await ref.read(chatControllerProvider.notifier).send(text, model: model);
+    final sent = await ref.read(chatControllerProvider.notifier).send(text, model: model);
+    // Keep the text if the send was rejected (offline / still answering).
+    if (!sent || !mounted) return;
     _controller.clear();
     setState(() => _hasText = false);
   }
@@ -695,10 +697,7 @@ class _ComposerState extends ConsumerState<_Composer> {
           children: [
             const _ContinuousVoiceToggle(),
             const _SpeakingIndicator(),
-            _VoiceButton(onFinalText: (text) {
-              final cfg = ref.read(settingsControllerProvider);
-              ref.read(chatControllerProvider.notifier).send(text, model: cfg.model, voice: cfg.voiceReplies);
-            }),
+            _VoiceButton(onFinalText: (text) => ref.read(chatControllerProvider.notifier).sendVoiceTranscript(text)),
             Expanded(
               child: TextField(
                 controller: _controller,
@@ -744,13 +743,15 @@ class _VoiceButton extends ConsumerWidget {
     final voice = ref.watch(voiceControllerProvider);
     final notifier = ref.read(voiceControllerProvider.notifier);
 
-    if (voice.error != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(SnackBar(content: Text(voice.error!)));
-      });
-    }
+    // Show each voice error once (on transition), then clear it; showing it from
+    // build re-displayed it on every rebuild (e.g. each sound-level update).
+    ref.listen<String?>(voiceControllerProvider.select((s) => s.error), (previous, next) {
+      if (next == null || next == previous) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(next)));
+      Future.microtask(notifier.clearError);
+    });
 
     final listening = voice.status == VoiceStatus.listening;
     final transcribing = voice.status == VoiceStatus.transcribing;
