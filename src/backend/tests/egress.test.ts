@@ -51,6 +51,28 @@ test("secret-looking strings are redacted (sec H1)", () => {
     assert.equal(redactSecrets(benign).count, 0);
 });
 
+test("redaction leaves ordinary code and pagination cursors alone", () => {
+    const code = [
+        "const token = req.headers.authorization;",
+        "const tokenizer = loadTokenizer();",
+        "const apiKey = process.env.OPENAI_API_KEY;",
+        "let password = getPassword(user);",
+        "max_tokens: 4096",
+        "secret: ${{ secrets.DEPLOY_KEY }}",
+        "token: <your-token-here>",
+    ].join("\n");
+    assert.equal(redactSecrets(code).text, code);
+    assert.equal(redactSecrets("https://www.googleapis.com/youtube/v3/search?pageToken=CAoQAA&q=x").count, 0);
+    assert.equal(redactSecrets("nextPageToken=CAUQAA2ab3kjhAbc").count, 0);
+    const state = createProvenance(["web_search"]);
+    assert.equal(checkOutbound("fetch_url", { url: "https://www.googleapis.com/youtube/v3/search?pageToken=CAoQAA&q=x" }, state), null);
+
+    // Real secrets in the same shapes are still caught.
+    for (const sample of ["password: hunter22", "const token = \"s3cr3t-v4lue\";", "?access_token=abc123def456ghi", "Authorization: Basic dXNlcjpodW50ZXIy"]) {
+        assert.ok(redactSecrets(sample).count > 0, sample);
+    }
+});
+
 test("PWD and other ordinary env vars are not treated as secrets", () => {
     const saved = { PWD: process.env.PWD, OLDPWD: process.env.OLDPWD, KEYBOARD_LAYOUT: process.env.KEYBOARD_LAYOUT };
     process.env.PWD = "/home/santi/jarvis";

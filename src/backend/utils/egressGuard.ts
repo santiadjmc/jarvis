@@ -140,6 +140,7 @@ const TOKEN_PATTERNS: RegExp[] = [
     /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
     /\bjvs_[A-Za-z0-9_-]{16,}/g,
     /\bBearer\s+[A-Za-z0-9._~+/-]{16,}=*/g,
+    /\bBasic\s+[A-Za-z0-9+/]{12,}=*/g,
 ];
 
 const SENSITIVE_NAME = "[A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|pass(?:w(?:or)?d|wd)?(?![a-z])|pwd|private[_-]?key|access[_-]?key|credentials?|authorization)[A-Za-z0-9_.-]*";
@@ -171,6 +172,52 @@ function secretEnvValues(): string[] {
     return values.sort((a, b) => b.length - a.length);
 }
 
+/** Names that contain a sensitive word but hold ordinary values (pagination, token counts, ...). */
+const NON_SECRET_ASSIGNMENT_NAME = /^(?:(?:next|prev(?:ious)?)_?)?page_?token$|^(?:sync|continuation|resumption)_?token$|tokeni[sz]|tokens$|token_?(?:count|type|usage|limit|budget)s?$|^max_?(?:new_?)?tokens?/i;
+
+/** Shannon entropy in bits per character. */
+export function entropy(text: string): number {
+    if (!text) return 0;
+    const counts = new Map<string, number>();
+    for (const ch of text) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+    let bits = 0;
+    for (const n of counts.values()) {
+        const p = n / text.length;
+        bits -= p * Math.log2(p);
+    }
+    return bits;
+}
+
+/**
+ * Decides whether the value of a `token = ...` style assignment is an actual
+ * secret rather than code (`req.headers.authorization`, `loadTokenizer()`),
+ * a placeholder or a short pagination cursor.
+ */
+function looksLikeAssignedSecret(name: string, sep: string, quote: string, rawValue: string): boolean {
+    // Drop object paths (config.token) and the "n" of a JSON-escaped newline before KEY=value.
+    const bareName = name.replace(/^.*[.]/, "").replace(/^n(?=[A-Z][A-Z0-9_]*$)/, "");
+    if (NON_SECRET_ASSIGNMENT_NAME.test(bareName)) return false;
+    const value = rawValue.replace(/[\\"';)]+$/, "");
+    if (value.length < 6 || value.startsWith("[REDACTED")) return false;
+    if (/^\d+$/.test(value) || /^(true|false|null|undefined|none|nil|yes|no)$/i.test(value)) return false;
+    // Code: calls, member access, template/shell/env references.
+    if (/[()[\]{}]/.test(value) || /^[$%]/.test(value) || /^(process\.env|os\.environ|env\.)/.test(value)) return false;
+    if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+$/.test(value)) return false;
+    if (/^(?:x+|\*+|\.+|<[^>]*>|your[_-].*|changeme|example|placeholder)$/i.test(value)) return false;
+
+    // A quoted literal, or KEY=value in .env style, is taken at face value.
+    const envStyle = /^[A-Z0-9_]+$/.test(bareName) && sep.trim() === "=" && !/\s/.test(sep);
+    if (quote || envStyle) return true;
+
+    // Unquoted (YAML, code, URLs): require something that looks random.
+    if (value.length < 8) return false;
+    const hasLetter = /[A-Za-z]/.test(value);
+    const hasDigit = /\d/.test(value);
+    const hasSymbol = /[^A-Za-z0-9_.-]/.test(value);
+    if (hasLetter && (hasDigit || hasSymbol)) return true;
+    return value.length >= 16 && entropy(value) >= 3.5;
+}
+
 /** Replaces secret-looking strings with "[REDACTED]". */
 export function redactSecrets(text: string): { text: string; count: number } {
     let count = 0;
@@ -189,7 +236,7 @@ export function redactSecrets(text: string): { text: string; count: number } {
         });
     }
     out = out.replace(ASSIGNMENT, (match, q1: string, name: string, sep: string, q2: string, value: string) => {
-        if (/^\d+$/.test(value) || /^(true|false|null|undefined)$/i.test(value) || value.startsWith("[REDACTED")) return match;
+        if (!looksLikeAssignedSecret(name, sep, q2, value)) return match;
         count++;
         return `${q1}${name}${q1}${sep}${q2}[REDACTED]`;
     });
