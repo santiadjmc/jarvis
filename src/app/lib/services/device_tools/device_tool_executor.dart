@@ -37,15 +37,31 @@ Future<void> _ensureNotificationsInitialized() async {
   _notificationsInitialized = true;
 }
 
-final _phoneNumberPattern = RegExp(r'^\+?[0-9]{3,15}$');
+/// `+` and 2-15 digits, `00` and up to 15 more (international prefix), or a
+/// plain 2-15 digit number (local numbers and short service codes).
+final _phoneNumberPattern = RegExp(r'^(?:\+[0-9]{2,15}|00[0-9]{2,15}|[0-9]{2,15})$');
+
+/// Pause (`,`) and wait (`;`) characters followed by extension digits.
+final _dialSuffixPattern = RegExp(r'^[,;][0-9,;]*$');
 
 /// Normalizes a dialable phone number, or returns null when it is not one.
-/// Strips common separators, then accepts only `+` and 3-15 digits, so MMI/USSD
-/// codes (anything with `*` or `#`) and other dialer strings are rejected.
-String? normalizePhoneNumber(String raw) {
+///
+/// Strips a `tel:` prefix and common separators, then accepts digits with an
+/// optional leading `+` or `00`. With [allowPauses], a `,`/`;` suffix for
+/// extensions is kept (`+1 555 123 4567,,123`). MMI/USSD codes (anything with
+/// `*` or `#`) and other dialer strings are always rejected.
+String? normalizePhoneNumber(String raw, {bool allowPauses = false}) {
   if (raw.contains('*') || raw.contains('#')) return null;
-  final cleaned = raw.trim().replaceAll(RegExp(r'[\s\-().]'), '');
-  return _phoneNumberPattern.hasMatch(cleaned) ? cleaned : null;
+  var cleaned = raw.trim();
+  if (cleaned.toLowerCase().startsWith('tel:')) cleaned = cleaned.substring(4);
+  cleaned = cleaned.replaceAll(RegExp(r';ext=', caseSensitive: false), ',').replaceAll(RegExp(r'[\s\-().]'), '');
+  final pause = cleaned.indexOf(RegExp(r'[,;]'));
+  final main = pause < 0 ? cleaned : cleaned.substring(0, pause);
+  final suffix = pause < 0 ? '' : cleaned.substring(pause);
+  if (!_phoneNumberPattern.hasMatch(main)) return null;
+  if (suffix.isEmpty) return main;
+  if (!allowPauses || !_dialSuffixPattern.hasMatch(suffix)) return null;
+  return '$main$suffix';
 }
 
 class DeviceToolResult {
@@ -435,9 +451,10 @@ class DeviceToolExecutor {
   Future<DeviceToolResult> _callNumber(Map<String, dynamic> params) async {
     final raw = (params['number'] as String?)?.trim() ?? '';
     if (raw.isEmpty) return DeviceToolResult.failure('number is required');
-    final number = normalizePhoneNumber(raw);
+    final number = normalizePhoneNumber(raw, allowPauses: true);
     if (number == null) {
-      return DeviceToolResult.failure('Invalid phone number: use digits with an optional leading + (no * or # codes)');
+      return DeviceToolResult.failure(
+          'Invalid phone number: use digits with an optional leading + or 00, optionally followed by , or ; and an extension (no * or # codes)');
     }
     try {
       final called = await FlutterPhoneDialer.callNumber(number);
@@ -456,7 +473,7 @@ class DeviceToolExecutor {
     if (message.isEmpty) return DeviceToolResult.failure('message is required');
     final number = normalizePhoneNumber(raw);
     if (number == null) {
-      return DeviceToolResult.failure('Invalid phone number: use digits with an optional leading + (no * or # codes)');
+      return DeviceToolResult.failure('Invalid phone number: use digits with an optional leading + or 00 (no * or # codes, no extensions)');
     }
     if (message.length > _smsMaxChars) {
       return DeviceToolResult.failure('message is too long (max $_smsMaxChars characters)');
@@ -470,8 +487,9 @@ class DeviceToolExecutor {
       if (!await _telephonySms.requestPermission()) {
         return DeviceToolResult.failure('SMS permission denied');
       }
-      _smsSentAt.add(now);
       await _telephonySms.sendSMS(phone: number, message: message);
+      // Only successful sends count against the hourly limit.
+      _smsSentAt.add(now);
       return DeviceToolResult(success: true, data: {'to': number, 'sentChars': message.length});
     } on TelephonySmsException catch (e) {
       return DeviceToolResult.failure(e.toString());
