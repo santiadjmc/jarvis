@@ -13,6 +13,7 @@ import networkTools from "../tools/implementations/network";
 import webTools, { stripMarkup } from "../tools/implementations/web";
 import { guardedFetch, isPrivateAddress, resolvePublicAddress } from "../utils/netguard";
 import { checkBrowserRequestUrl } from "../agent/Browser/browserSession";
+import toolRegistry from "../tools/registry";
 import Server from "../server";
 import { consumeConnectToken, issueConnectToken } from "../agent/Google/googleAuth";
 
@@ -355,4 +356,11 @@ test("fetch_url stops reading an endless body at the size cap (sec L6)", async (
         server.closeAllConnections();
         await new Promise<void>(resolve => server.close(() => resolve()));
     }
+});
+
+test("tool result serialization keeps __proto__ keys as data (sec I2)", () => {
+    const data = JSON.parse('{"__proto__": {"polluted": true}, "ok": 1}');
+    const json = toolRegistry.serializeForModel("x", { success: true, data, executionTimeMs: 0 });
+    assert.match(json, /"__proto__":\{"polluted":true\}/);
+    assert.equal(({} as any).polluted, undefined);
 });

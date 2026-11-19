@@ -188,7 +188,8 @@ function truncateDeep(value: unknown, max: number): unknown {
     }
     if (Array.isArray(value)) return value.map(v => truncateDeep(v, max));
     if (value && typeof value === "object") {
-        const out: Record<string, unknown> = {};
+        // Null prototype: a "__proto__" key from tool data stays a plain own property.
+        const out: Record<string, unknown> = Object.create(null);
         for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
             out[k] = truncateDeep(v, max);
         }
