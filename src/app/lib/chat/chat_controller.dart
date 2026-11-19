@@ -59,14 +59,16 @@ class ToolStep {
     );
   }
 
+  /// Used for session.json. Device tool params/results (contacts, location,
+  /// SMS text, clipboard, screen dumps, shell output) are not persisted.
   Map<String, dynamic> toJson() => {
         'callId': callId,
         'name': name,
-        'params': params,
+        'params': isDeviceTool ? const <String, dynamic>{} : params,
         'requiresApproval': requiresApproval,
         'status': status.name,
         if (error != null) 'error': error,
-        if (result != null) 'result': result,
+        if (result != null && !isDeviceTool) 'result': result,
         if (executor != null) 'executor': executor,
       };
 
