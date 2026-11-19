@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import conversationManager from "../ai/ConversationManager";
 import toolRegistry from "../tools/registry";
+import { cleanForSpeech } from "../voice/TtsService";
 import modelManager from "../ai/ModelManager";
 import { status as googleStatus } from "../agent/Google/googleAuth";
 import ProcessManager, { decideRestart } from "../ProcessManager";
@@ -340,4 +341,8 @@ test("deleting a conversation clears its compaction bookkeeping (dev L10)", () =
     conversationManager.delete(conversation.id);
     assert.equal(conversationManager.isCompacting(conversation.id), false);
     assert.equal((conversationManager as any).compactedAt.has(conversation.id), false);
+});
+
+test("markdown links are spoken as their text (dev L1)", () => {
+    assert.equal(cleanForSpeech("see [the docs](http://x.example/a) now"), "see the docs now");
 });

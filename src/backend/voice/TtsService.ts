@@ -121,11 +121,11 @@ class TtsService {
     }
 }
 
-function cleanForSpeech(text: string): string {
+export function cleanForSpeech(text: string): string {
     return text
         .replace(/```[\s\S]*?```/g, " ")
         .replace(/`[^`]*`/g, " ")
-        .replace(/\[(?:[^\]]*)\]\((?:[^)]*)\)/g, "$1")
+        .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
         .replace(/https?:\/\/\S+/g, " ")
         .replace(/<[^>]+>/g, " ")
         .replace(/[#*_>~|`]/g, " ")
