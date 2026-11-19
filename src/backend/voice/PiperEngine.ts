@@ -72,29 +72,47 @@ export class PiperEngine {
         return new Promise<SynthesizedAudio>((resolve, reject) => {
             const child = spawn(this.binary, args);
             let stderr = "";
+            let settled = false;
+            const fail = (err: Error) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                unlink(outPath).catch(() => {});
+                reject(err);
+            };
+            // A hung piper would otherwise block this request's speech queue forever.
+            const timer = setTimeout(() => {
+                child.kill("SIGKILL");
+                fail(new Error(`piper timed out after ${PIPER_TIMEOUT_MS}ms`));
+            }, PIPER_TIMEOUT_MS);
             child.stderr.on("data", (d: Buffer) => {
                 stderr += d.toString();
             });
-            child.on("error", (err) => {
-                reject(err);
-            });
+            child.on("error", fail);
+            // EPIPE when piper exits early (e.g. bad model) must not become an uncaught exception.
+            child.stdin.on("error", fail);
             child.on("close", async (code) => {
+                if (settled) return;
                 if (code !== 0) {
-                    reject(new Error(`piper exited with code ${code}: ${stderr.slice(0, 300)}`));
+                    fail(new Error(`piper exited with code ${code}: ${stderr.slice(0, 300)}`));
                     return;
                 }
                 try {
                     const audio = await readFile(outPath);
                     await unlink(outPath).catch(() => {});
+                    settled = true;
+                    clearTimeout(timer);
                     resolve({ audio, format: "wav", sampleRate: readSampleRate(audio), durationMs: wavDurationMs(audio) });
                 } catch (err: any) {
-                    reject(err);
+                    fail(err);
                 }
             });
             child.stdin.end(text);
         });
     }
 }
+
+const PIPER_TIMEOUT_MS = 30000;
 
 export function readSampleRate(buf: Buffer): number {
     if (buf.length < 28 || buf.toString("ascii", 0, 4) !== "RIFF") return 22050;
