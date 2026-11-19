@@ -10,7 +10,7 @@ import resultBroker from "../tools/ResultBroker";
 import fileTools from "../tools/implementations/fs";
 import gitTools from "../tools/implementations/git";
 import networkTools from "../tools/implementations/network";
-import { stripMarkup } from "../tools/implementations/web";
+import webTools, { stripMarkup } from "../tools/implementations/web";
 import { guardedFetch, isPrivateAddress, resolvePublicAddress } from "../utils/netguard";
 import { checkBrowserRequestUrl } from "../agent/Browser/browserSession";
 import Server from "../server";
@@ -327,4 +327,32 @@ test("WS auth lockout rejects before validating the key (dev M7 / sec L3)", () =
     ws.authFailures.get(ip).resetAt = Date.now() - 1;
     ws.pruneAuthFailures(Date.now());
     assert.equal(ws.authFailures.has(ip), false);
+});
+
+test("fetch_url stops reading an endless body at the size cap (sec L6)", async () => {
+    let closed = false;
+    const server = http.createServer((req, res) => {
+        res.writeHead(200, { "Content-Type": "text/plain" });
+        const chunk = "a".repeat(65536);
+        const timer = setInterval(() => res.write(chunk), 1);
+        res.on("close", () => { clearInterval(timer); closed = true; });
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as net.AddressInfo).port;
+    const previous = process.env.JARVIS_FETCH_ALLOW_PRIVATE;
+    process.env.JARVIS_FETCH_ALLOW_PRIVATE = "1";
+    try {
+        const fetchUrl = webTools.find(t => t.name === "fetch_url")!;
+        const r = await fetchUrl.execute({ url: `http://127.0.0.1:${port}/` }, { clientId: "t", requestId: "t" });
+        assert.equal(r.success, true, r.error ?? "");
+        assert.equal((r.data as any).truncated, true);
+        assert.ok((r.data as any).bytes <= 262144);
+        for (let i = 0; i < 50 && !closed; i++) await new Promise(res => setTimeout(res, 20));
+        assert.equal(closed, true, "connection should be closed after the cap");
+    } finally {
+        if (previous === undefined) delete process.env.JARVIS_FETCH_ALLOW_PRIVATE;
+        else process.env.JARVIS_FETCH_ALLOW_PRIVATE = previous;
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+    }
 });

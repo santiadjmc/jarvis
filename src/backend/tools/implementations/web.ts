@@ -59,9 +59,7 @@ const fetchUrl: ToolSpec = {
             if (!response.ok) {
                 return { success: false, data: null, error: `HTTP ${response.status} ${response.statusText}` };
             }
-            const buffer = Buffer.from(await response.arrayBuffer());
-            const truncated = buffer.length > MAX_FETCH_BYTES;
-            const bytes = truncated ? buffer.subarray(0, MAX_FETCH_BYTES) : buffer;
+            const { buffer: bytes, truncated } = await readCapped(response, MAX_FETCH_BYTES);
             const decoded = bytes.toString("utf-8");
             const stripped = stripMarkup(decoded, response.headers.get("content-type") || "");
             return {
@@ -69,7 +67,7 @@ const fetchUrl: ToolSpec = {
                 data: {
                     url: response.url || url,
                     contentType: response.headers.get("content-type") || "",
-                    bytes: buffer.length,
+                    bytes: bytes.length,
                     truncated,
                     content: stripped.length > MAX_FETCH_BYTES ? stripped.slice(0, MAX_FETCH_BYTES) + "\n...[truncated]" : stripped,
                 },
@@ -81,6 +79,34 @@ const fetchUrl: ToolSpec = {
         }
     },
 };
+
+/**
+ * Reads at most `max` bytes of a response body, then cancels the stream, so an
+ * endless or huge body can't exhaust memory. `truncated` is true if more data existed.
+ */
+async function readCapped(response: Response, max: number): Promise<{ buffer: Buffer; truncated: boolean }> {
+    const reader = response.body?.getReader();
+    if (!reader) return { buffer: Buffer.alloc(0), truncated: false };
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let truncated = false;
+    try {
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(Buffer.from(value));
+            total += value.byteLength;
+            if (total > max) {
+                truncated = true;
+                break;
+            }
+        }
+    } finally {
+        reader.cancel().catch(() => {});
+    }
+    const buffer = Buffer.concat(chunks);
+    return { buffer: truncated ? buffer.subarray(0, max) : buffer, truncated };
+}
 
 const RAW_TEXT_TAGS = ["script", "style", "noscript"];
 
@@ -179,8 +205,8 @@ const httpRequest: ToolSpec = {
         const timer = setTimeout(() => controller.abort(), 15000);
         try {
             const response = await guardedFetch(url, { method, headers, body, signal: controller.signal });
-            const text = await response.text();
-            const truncated = text.length > MAX_FETCH_BYTES;
+            const { buffer, truncated } = await readCapped(response, MAX_FETCH_BYTES);
+            const text = buffer.toString("utf-8");
             return {
                 success: response.ok,
                 data: {
@@ -188,7 +214,7 @@ const httpRequest: ToolSpec = {
                     statusText: response.statusText,
                     contentType: response.headers.get("content-type") || "",
                     truncated,
-                    body: truncated ? text.slice(0, MAX_FETCH_BYTES) + "\n...[truncated]" : text,
+                    body: truncated ? text + "\n...[truncated]" : text,
                 },
                 error: response.ok ? undefined : `HTTP ${response.status} ${response.statusText}`,
             };
