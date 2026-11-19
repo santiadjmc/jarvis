@@ -139,6 +139,10 @@ class DeviceToolExecutor {
 
   static final DeviceToolExecutor instance = DeviceToolExecutor._();
 
+  static const _smsMaxChars = 1000;
+  static const _smsMaxPerHour = 10;
+  final List<DateTime> _smsSentAt = [];
+
   Future<DeviceMeta> buildMeta(AppConfig config) async {
     String? model;
     String? manufacturer;
@@ -433,14 +437,27 @@ class DeviceToolExecutor {
   }
 
   Future<DeviceToolResult> _sendSms(Map<String, dynamic> params) async {
-    final number = (params['number'] as String?)?.trim() ?? '';
+    final raw = (params['number'] as String?)?.trim() ?? '';
     final message = (params['message'] as String?) ?? '';
-    if (number.isEmpty) return DeviceToolResult.failure('number is required');
+    if (raw.isEmpty) return DeviceToolResult.failure('number is required');
     if (message.isEmpty) return DeviceToolResult.failure('message is required');
+    final number = normalizePhoneNumber(raw);
+    if (number == null) {
+      return DeviceToolResult.failure('Invalid phone number: use digits with an optional leading + (no * or # codes)');
+    }
+    if (message.length > _smsMaxChars) {
+      return DeviceToolResult.failure('message is too long (max $_smsMaxChars characters)');
+    }
+    final now = DateTime.now();
+    _smsSentAt.removeWhere((t) => now.difference(t) > const Duration(hours: 1));
+    if (_smsSentAt.length >= _smsMaxPerHour) {
+      return DeviceToolResult.failure('SMS rate limit reached ($_smsMaxPerHour per hour); try again later');
+    }
     try {
       if (!await _telephonySms.requestPermission()) {
         return DeviceToolResult.failure('SMS permission denied');
       }
+      _smsSentAt.add(now);
       await _telephonySms.sendSMS(phone: number, message: message);
       return DeviceToolResult(success: true, data: {'to': number, 'sentChars': message.length});
     } on TelephonySmsException catch (e) {
