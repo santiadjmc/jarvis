@@ -432,7 +432,11 @@ class ChatController extends Notifier<ChatState> {
   }
 
   void setAutoApprove(bool value) {
-    ref.read(connectionControllerProvider.notifier).sendConfigSet('autoApprove', value);
+    final connection = ref.read(connectionControllerProvider.notifier);
+    connection.sendConfigSet('autoApprove', value);
+    // Re-read the server's actual value so the switch reflects a rejected
+    // change (e.g. PERMISSION_DENIED for a non-admin key) or another client's.
+    connection.sendConfigGet('autoApprove');
   }
 
   ChatMessage? _bubble(String id) {
