@@ -200,16 +200,27 @@ test("runs created from tainted context get the restricted tool set; blocked cal
     }
 });
 
-test("subagents delegated from tainted context are capped and restricted (sec M2)", async () => {
+test("subagents delegated from tainted context are capped and restricted (sec M2)", { timeout: 10_000 }, async () => {
     const llm = llmClient as any;
     const originalStream = llm.chatStream;
     let release!: () => void;
     const gate = new Promise<void>(r => { release = r; });
     const seenTools: string[][] = [];
+    // Each subagent signals when it reaches the LLM and when it's done with it.
+    let bothCalled!: () => void;
+    const reachedLlm = new Promise<void>(r => { bothCalled = r; });
+    const callsDone: Promise<void>[] = [];
     llm.chatStream = async function* (req: any) {
         seenTools.push((req.tools || []).map((t: any) => t.function.name));
-        await gate;
-        yield { content: "report" };
+        let finish!: () => void;
+        callsDone.push(new Promise<void>(r => { finish = r; }));
+        if (seenTools.length === 2) bothCalled();
+        try {
+            await gate;
+            yield { content: "report" };
+        } finally {
+            finish();
+        }
     };
     try {
         const delegate = tool("delegate_task");
@@ -221,12 +232,13 @@ test("subagents delegated from tainted context are capped and restricted (sec M2
         assert.match(second.error!, /limited to 1/);
         const userOrigin = await delegate.execute({ instructions: "normal" }, clean);
         assert.equal(userOrigin.success, true, "user-origin subagents are not affected by the external cap");
-        await new Promise(r => setTimeout(r, 20));
+        await reachedLlm;
         assert.ok(seenTools.some(t => !t.includes("fetch_url")), "external subagent has the restricted set");
         assert.ok(seenTools.some(t => t.includes("fetch_url")), "user subagent keeps the normal set");
     } finally {
         release();
-        await new Promise(r => setTimeout(r, 20));
+        // Only restore the real client once every started call has finished with the stub.
+        await Promise.all(callsDone);
         llm.chatStream = originalStream;
     }
 });

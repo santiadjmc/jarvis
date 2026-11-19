@@ -82,7 +82,7 @@ test("JARVIS_CHAT_QUEUE_MAX=0 rejects a second message on a busy conversation", 
     }
 });
 
-test("concurrent chats on one conversation are serialized end-to-end; queue-full and queued cancel notify the client (dev M10)", async () => {
+test("concurrent chats on one conversation are serialized end-to-end; queue-full and queued cancel notify the client (dev M10)", { timeout: 10_000 }, async () => {
     const router = modelRouter as any;
     const llm = llmClient as any;
     const cm = connectionManager as any;
@@ -100,12 +100,14 @@ test("concurrent chats on one conversation are serialized end-to-end; queue-full
     const active = { count: 0, max: 0 };
     const seen: string[] = [];
     const gates = new Map<string, ReturnType<typeof deferred>>();
+    const started = new Map<string, ReturnType<typeof deferred>>();
 
     router.route = async () => ({ model: "m", tier: "fast" });
     llm.chatStream = async function* (req: any) {
         const last = [...req.messages].reverse().find((m: any) => m.role === "user");
         const content = String(last?.content ?? "");
         seen.push(content);
+        started.get(content)?.release();
         active.count++;
         active.max = Math.max(active.max, active.count);
         try {
@@ -121,7 +123,10 @@ test("concurrent chats on one conversation are serialized end-to-end; queue-full
     try {
         const sessionId = crypto.randomUUID();
         const ids = ["one", "two", "three", "four"].map(() => crypto.randomUUID());
-        for (const name of ["one", "two", "three"]) gates.set(name, deferred());
+        for (const name of ["one", "two", "three"]) {
+            gates.set(name, deferred());
+            started.set(name, deferred());
+        }
         const p1 = aiOrchestrator.handleChat(client, { id: ids[0], content: "one", sessionId });
         const p2 = aiOrchestrator.handleChat(client, { id: ids[1], content: "two", sessionId });
         const p3 = aiOrchestrator.handleChat(client, { id: ids[2], content: "three", sessionId });
@@ -137,11 +142,11 @@ test("concurrent chats on one conversation are serialized end-to-end; queue-full
         await p3;
         assert.ok(sent.some(m => m.type === "status" && m.requestId === ids[2] && m.status === "idle"));
 
-        await new Promise(r => setTimeout(r, 20));
+        await started.get("one")!.promise;
         assert.deepEqual(seen, ["one"], "second turn must not start while the first is running");
         gates.get("one")!.release();
         await p1;
-        await new Promise(r => setTimeout(r, 20));
+        await started.get("two")!.promise;
         assert.deepEqual(seen, ["one", "two"]);
         gates.get("two")!.release();
         await p2;

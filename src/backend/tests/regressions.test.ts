@@ -121,25 +121,32 @@ test("stale-stream sweep is idle-based and aborts with a timeout reason (dev H1)
     }
 });
 
-test("cancelling a chat stream closes the upstream LLM connection (dev H2)", async () => {
+test("cancelling a chat stream closes the upstream LLM connection (dev H2)", { timeout: 10_000 }, async () => {
     const http = await import("node:http");
     let closed = 0;
+    const closeWaiters: Array<{ n: number; resolve: () => void }> = [];
     const server = http.createServer((req, res) => {
         req.resume();
         res.writeHead(200, { "Content-Type": "text/event-stream" });
         const timer = setInterval(() => {
             res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "x" } }] })}\n\n`);
         }, 20);
-        res.on("close", () => { clearInterval(timer); closed++; });
+        res.on("close", () => {
+            clearInterval(timer);
+            closed++;
+            for (const w of closeWaiters.filter(w => closed >= w.n)) w.resolve();
+        });
     });
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as import("node:net").AddressInfo).port;
     const client = llmClient as any;
     const previousBase = client.baseUrl;
     client.baseUrl = `http://127.0.0.1:${port}/v1`;
-    const waitFor = async (n: number) => {
-        for (let i = 0; i < 100 && closed < n; i++) await new Promise(r => setTimeout(r, 20));
-    };
+    // Resolves on the n-th upstream close; the test's own timeout catches a leak.
+    const waitFor = (n: number) => new Promise<void>(resolve => {
+        if (closed >= n) resolve();
+        else closeWaiters.push({ n, resolve });
+    });
     try {
         // Consumer stops early (as runAgent does with `break`).
         for await (const chunk of llmClient.chatStream({ model: "m", messages: [], stream: true })) {
@@ -251,7 +258,8 @@ test("restart limit forgives crashes older than the restart window (dev M5)", ()
     assert.equal(decideRestart({ ...base, elapsedSinceLastCrash: 60_000 }).restart, false);
 });
 
-test("SIGTERM during a restart window shuts down instead of spawning a new child (dev M4)", async () => {
+test("SIGTERM during a restart window shuts down instead of spawning a new child (dev M4)", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
     const pm = Object.create(ProcessManager.prototype) as any;
     Object.assign(pm, {
         child: { pid: undefined, once: () => {}, kill: () => {} },
@@ -275,7 +283,8 @@ test("SIGTERM during a restart window shuts down instead of spawning a new child
     pm.shutdown("SIGTERM");
     assert.equal(finished, 1, "shutdown is honoured during the restart window");
     assert.equal(pm.restartKillTimer, null);
-    await new Promise(r => setTimeout(r, 50));
+    // Run every pending restart timer: none may start a new child.
+    t.mock.timers.tick(60_000);
     assert.equal(started, 0);
 });
 

@@ -410,13 +410,15 @@ test("WS auth lockout rejects before validating the key (dev M7 / sec L3)", () =
     assert.equal(ws.authFailures.has(ip), false);
 });
 
-test("fetch_url stops reading an endless body at the size cap (sec L6)", async () => {
+test("fetch_url stops reading an endless body at the size cap (sec L6)", { timeout: 10_000 }, async () => {
     let closed = false;
+    let markClosed!: () => void;
+    const closedEvent = new Promise<void>(r => { markClosed = r; });
     const server = http.createServer((req, res) => {
         res.writeHead(200, { "Content-Type": "text/plain" });
         const chunk = "a".repeat(65536);
         const timer = setInterval(() => res.write(chunk), 1);
-        res.on("close", () => { clearInterval(timer); closed = true; });
+        res.on("close", () => { clearInterval(timer); closed = true; markClosed(); });
     });
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as net.AddressInfo).port;
@@ -428,7 +430,7 @@ test("fetch_url stops reading an endless body at the size cap (sec L6)", async (
         assert.equal(r.success, true, r.error ?? "");
         assert.equal((r.data as any).truncated, true);
         assert.ok((r.data as any).bytes <= 262144);
-        for (let i = 0; i < 50 && !closed; i++) await new Promise(res => setTimeout(res, 20));
+        await closedEvent; // the test's own timeout fails it if the connection is never closed
         assert.equal(closed, true, "connection should be closed after the cap");
     } finally {
         if (previous === undefined) delete process.env.JARVIS_FETCH_ALLOW_PRIVATE;
