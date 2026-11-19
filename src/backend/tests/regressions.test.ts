@@ -3,7 +3,7 @@ import test from "node:test";
 import conversationManager from "../ai/ConversationManager";
 import toolRegistry from "../tools/registry";
 import { addTask, listTasks } from "../agent/Scheduler/taskStore";
-import llmClient from "../ai/LLMClient";
+import llmClient, { finalizeToolCalls } from "../ai/LLMClient";
 import streamManager, { isStreamTimeout } from "../server/ws/StreamManager";
 import { closeBrowser, listPageIds, openPage } from "../agent/Browser/browserSession";
 
@@ -205,4 +205,13 @@ test("a corrupt JSON store is backed up instead of being overwritten (dev H4)", 
         else process.env.JARVIS_DATA_DIR = previous;
         await rm(dir, { recursive: true, force: true });
     }
+});
+
+test("tool calls without backend ids get unique ids (dev L13)", () => {
+    const pending = new Map([[0, { name: "a", args: "{}" }], [1, { name: "b", args: "" }]]);
+    const first = finalizeToolCalls(pending as any);
+    const second = finalizeToolCalls(pending as any);
+    assert.notEqual(first[0].id, second[0].id);
+    assert.notEqual(first[0].id, first[1].id);
+    assert.match(first[0].id!, /^call_/);
 });

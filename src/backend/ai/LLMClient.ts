@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { Agent, fetch as undiciFetch } from "undici";
 import type {
     OllamaChatOptions,
@@ -56,7 +57,7 @@ function toWireMessage(msg: OllamaMessage): Record<string, unknown> {
     return wire;
 }
 
-function finalizeToolCalls(pending: Map<number, PendingToolCall>): OllamaToolCall[] {
+export function finalizeToolCalls(pending: Map<number, PendingToolCall>): OllamaToolCall[] {
     const out: OllamaToolCall[] = [];
     for (const [index, call] of Array.from(pending.entries()).sort((a, b) => a[0] - b[0])) {
         let parsedArgs: Record<string, unknown> = {};
@@ -68,7 +69,9 @@ function finalizeToolCalls(pending: Map<number, PendingToolCall>): OllamaToolCal
             }
         }
         out.push({
-            id: call.id || `call_${index}`,
+            // Unique per call: backends that omit ids would otherwise reuse call_0 every
+            // turn, letting a late device result resolve the wrong turn's wait.
+            id: call.id || `call_${randomUUID()}`,
             type: "function",
             function: { name: call.name, arguments: parsedArgs },
         });
