@@ -156,6 +156,9 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
       _connectResult = null;
       state = state.copyWith(status: ConnectionStatus.disconnected, errorMessage: e.message);
       return;
+    } catch (e) {
+      _failConnect('Could not reach server: $e');
+      return;
     }
     state = state.copyWith(status: ConnectionStatus.connecting, clearError: true);
     try {
