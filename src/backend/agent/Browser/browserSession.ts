@@ -1,7 +1,7 @@
 import { v4 as uuid } from "uuid";
 import puppeteer, { type Browser, type Page } from "puppeteer";
 import Log from "../../Log";
-import { assertPublicUrl } from "../../utils/netguard";
+import { allowPrivateNetworks, assertPublicHost, assertPublicUrl } from "../../utils/netguard";
 
 const MAX_PAGES = 5;
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -39,9 +39,66 @@ async function getBrowser(): Promise<Browser> {
     }
     browserPromise = puppeteer.launch({
         headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+        args: launchArgs(),
     });
     return browserPromise;
+}
+
+/**
+ * Chromium's sandbox stays on unless we run as root (Chrome refuses to start
+ * as root with it enabled) or JARVIS_BROWSER_NO_SANDBOX=1 is set for hosts
+ * without user namespaces. Running Jarvis as a non-root user is recommended.
+ */
+function launchArgs(): string[] {
+    const args = ["--disable-dev-shm-usage"];
+    const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+    if (isRoot || process.env.JARVIS_BROWSER_NO_SANDBOX === "1") {
+        Log.warn("Launching headless browser without the Chromium sandbox", {
+            reason: isRoot ? "running as root" : "JARVIS_BROWSER_NO_SANDBOX=1",
+        });
+        args.push("--no-sandbox", "--disable-setuid-sandbox");
+    }
+    return args;
+}
+
+/** Returns an error message when a browser request must be blocked, else null. */
+export async function checkBrowserRequestUrl(raw: string): Promise<string | null> {
+    let url: URL;
+    try {
+        url = new URL(raw);
+    } catch {
+        return "invalid URL";
+    }
+    if (url.protocol === "data:" || url.protocol === "blob:" || url.href === "about:blank") return null;
+    if (url.protocol !== "http:" && url.protocol !== "https:") return `scheme ${url.protocol} is not allowed`;
+    if (allowPrivateNetworks()) return null;
+    try {
+        await assertPublicHost(url.hostname);
+        return null;
+    } catch (err: any) {
+        return err.message;
+    }
+}
+
+/**
+ * Every request the page makes (navigations, redirects, subresources, fetch/XHR)
+ * is re-checked against netguard, not just the first URL. Residual risk: Chromium
+ * resolves DNS itself after our check, so a sub-second DNS rebind is not fully
+ * excluded; an egress proxy would be needed for that.
+ */
+export async function guardPage(page: Page): Promise<void> {
+    await page.setRequestInterception(true);
+    page.on("request", (request) => {
+        if (request.isInterceptResolutionHandled()) return;
+        checkBrowserRequestUrl(request.url()).then((blocked) => {
+            if (request.isInterceptResolutionHandled()) return;
+            if (blocked) {
+                Log.warn("Blocked browser request", { url: request.url().slice(0, 200), reason: blocked });
+                return request.abort("blockedbyclient");
+            }
+            return request.continue();
+        }).catch(() => {});
+    });
 }
 
 export async function openPage(url: string, existingPageId?: string): Promise<{ pageId: string; title: string; text: string }> {
@@ -58,6 +115,7 @@ export async function openPage(url: string, existingPageId?: string): Promise<{ 
         }
         const browser = await getBrowser();
         page = await browser.newPage();
+        await guardPage(page);
         pageId = uuid();
         pages.set(pageId, { page, lastUsedAt: Date.now() });
     }

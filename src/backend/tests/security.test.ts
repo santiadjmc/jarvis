@@ -10,6 +10,7 @@ import resultBroker from "../tools/ResultBroker";
 import fileTools from "../tools/implementations/fs";
 import { stripMarkup } from "../tools/implementations/web";
 import { guardedFetch, isPrivateAddress } from "../utils/netguard";
+import { checkBrowserRequestUrl } from "../agent/Browser/browserSession";
 
 test("device ids are bound to the authenticating key; spoofed results are rejected (H3)", async () => {
     const deviceId = crypto.randomUUID();
@@ -200,5 +201,19 @@ test("guardedFetch strips credentials on cross-origin redirects and downgrades 3
         else process.env.JARVIS_FETCH_ALLOW_PRIVATE = previous;
         await new Promise<void>(resolve => sink.close(() => resolve()));
         await new Promise<void>(resolve => redirector.close(() => resolve()));
+    }
+});
+
+test("browser request guard blocks private hosts and non-http schemes (sec H2)", async () => {
+    const previous = process.env.JARVIS_FETCH_ALLOW_PRIVATE;
+    delete process.env.JARVIS_FETCH_ALLOW_PRIVATE;
+    try {
+        for (const url of ["http://127.0.0.1:8080/", "http://169.254.169.254/latest/meta-data/", "http://[::1]/", "http://localhost/", "file:///etc/passwd", "chrome://settings"]) {
+            assert.notEqual(await checkBrowserRequestUrl(url), null, url);
+        }
+        assert.equal(await checkBrowserRequestUrl("data:text/plain,hi"), null);
+        assert.equal(await checkBrowserRequestUrl("http://8.8.8.8/"), null);
+    } finally {
+        if (previous !== undefined) process.env.JARVIS_FETCH_ALLOW_PRIVATE = previous;
     }
 });
