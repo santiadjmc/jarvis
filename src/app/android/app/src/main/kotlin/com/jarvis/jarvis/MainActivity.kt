@@ -41,6 +41,7 @@ class MainActivity : FlutterActivity() {
                         result.success(service.tapNode(call.argument("viewId"), call.argument("text")))
                     }
                 }
+                "foregroundPackage" -> result.success(service?.foregroundPackage())
                 "tapAt" -> {
                     if (service == null) {
                         result.error("UNAVAILABLE", "Accessibility service is not enabled", null)

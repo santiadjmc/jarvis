@@ -28,6 +28,15 @@ class AccessibilityService {
     return (await _channel.invokeMethod<bool>('tapNode', {'viewId': viewId, 'text': text})) ?? false;
   }
 
+  /// Package name of the app in the active window, or null if unknown.
+  static Future<String?> foregroundPackage() async {
+    try {
+      return await _channel.invokeMethod<String>('foregroundPackage');
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<bool> tapAt(int x, int y) async {
     return (await _channel.invokeMethod<bool>('tapAt', {'x': x, 'y': y})) ?? false;
   }

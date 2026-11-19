@@ -59,14 +59,17 @@ class ToolStep {
     );
   }
 
+  /// Used for session.json. Device tool params/results/errors (contacts,
+  /// location, SMS text, clipboard, screen dumps, shell output, phone numbers
+  /// echoed in error messages) are not persisted.
   Map<String, dynamic> toJson() => {
         'callId': callId,
         'name': name,
-        'params': params,
+        'params': isDeviceTool ? const <String, dynamic>{} : params,
         'requiresApproval': requiresApproval,
         'status': status.name,
-        if (error != null) 'error': error,
-        if (result != null) 'result': result,
+        if (error != null) 'error': isDeviceTool ? 'Failed' : error,
+        if (result != null && !isDeviceTool) 'result': result,
         if (executor != null) 'executor': executor,
       };
 
@@ -165,14 +168,13 @@ class ChatMessage {
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) => ChatMessage(
         id: json['id'] as String,
-        role: MessageRole.values.firstWhere((r) => r.name == json['role']),
+        role: MessageRole.values.asNameMap()[json['role']] ??
+            (throw FormatException('Unknown message role: ${json['role']}')),
         content: json['content'] as String? ?? '',
         thinking: json['thinking'] as String? ?? '',
         complete: json['complete'] as bool? ?? true,
         model: json['model'] as String?,
-        status: json['status'] is String
-            ? ChatStatus.values.firstWhere((s) => s.name == json['status'])
-            : null,
+        status: json['status'] is String ? ChatStatus.values.asNameMap()[json['status']] : null,
         errorMessage: json['errorMessage'] as String?,
         tools: (json['tools'] as List<dynamic>? ?? [])
             .map((t) => ToolStep.fromJson(t as Map<String, dynamic>))
@@ -224,6 +226,7 @@ class ChatController extends Notifier<ChatState> {
   String? _activeRequestId;
   String? _sessionId;
   bool _subscribed = false;
+  StreamSubscription<ServerMessage>? _messagesSub;
   bool _loadStarted = false;
   Timer? _persistTimer;
   File? _storeFile;
@@ -237,7 +240,10 @@ class ChatController extends Notifier<ChatState> {
 
   @override
   ChatState build() {
-    final connection = ref.watch(connectionControllerProvider);
+    // Read, don't watch: watching rebuilt (and reset) this notifier on every
+    // connection state change, including each pong. `online` is kept current
+    // by the ref.listen in _initListener.
+    final connection = ref.read(connectionControllerProvider);
     final online = connection.status == ConnectionStatus.connected;
     _sessionId ??= _uuid.v4();
     _initListener();
@@ -263,19 +269,35 @@ class ChatController extends Notifier<ChatState> {
       if (raw.trim().isEmpty) return;
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
       final loadedId = decoded['sessionId'] as String?;
-      final loaded = (decoded['messages'] as List<dynamic>? ?? [])
-          .map((m) => ChatMessage.fromJson(m as Map<String, dynamic>))
-          .toList();
-      if (loaded.isEmpty) return;
-      _sessionId = loadedId;
-      _messages = loaded;
-      _callToMessage.clear();
-      for (final m in loaded) {
-        for (final t in m.tools) {
-          _callToMessage[t.callId] = m.id;
+      // Skip individual bad entries instead of discarding the whole history.
+      final loaded = <ChatMessage>[];
+      for (final m in decoded['messages'] as List<dynamic>? ?? const []) {
+        try {
+          loaded.add(ChatMessage.fromJson(m as Map<String, dynamic>));
+        } catch (e) {
+          debugPrint('Jarvis: skipping unreadable history entry: $e');
         }
       }
-      state = ChatState(messages: _messages, sessionId: loadedId, online: state.online);
+      // Rewrite the file in its current redacted form, so details saved by
+      // older versions don't stay on disk until the next reply.
+      _schedulePersist();
+      if (loaded.isEmpty) return;
+      // If the user already sent something under a fresh session id before
+      // the file was read, the server has no context for the old history:
+      // keep the sessions apart instead of showing them as one conversation.
+      final userAlreadySent = _messages.any((m) => m.role == MessageRole.user);
+      if (userAlreadySent && loadedId != _sessionId) return;
+      if (loadedId != null) _sessionId = loadedId;
+      // Frames may have arrived while the file was read: merge history in
+      // front of them instead of replacing them.
+      final liveIds = _messages.map((m) => m.id).toSet();
+      _messages = [...loaded.where((m) => !liveIds.contains(m.id)), ..._messages];
+      for (final m in loaded) {
+        for (final t in m.tools) {
+          _callToMessage.putIfAbsent(t.callId, () => m.id);
+        }
+      }
+      state = state.copyWith(messages: _messages, sessionId: _sessionId);
     } catch (e) {
       stderr.writeln('Failed to load session: $e');
     }
@@ -310,11 +332,14 @@ class ChatController extends Notifier<ChatState> {
         state = state.copyWith(online: next.status == ConnectionStatus.connected);
         if (next.status == ConnectionStatus.connected) {
           ref.read(connectionControllerProvider.notifier).sendConfigGet('autoApprove');
+        } else if (prev?.status == ConnectionStatus.connected) {
+          _settleInterrupted();
         }
       }
     });
     final messages = ref.read(connectionControllerProvider.notifier).messages;
-    messages.listen((ServerMessage msg) => _handle(msg), onError: (Object e) {
+    _messagesSub?.cancel();
+    _messagesSub = messages.listen((ServerMessage msg) => _handle(msg), onError: (Object e) {
       state = state.copyWith(pendingError: e.toString());
     });
     if (!_ttsHooked) {
@@ -322,17 +347,49 @@ class ChatController extends Notifier<ChatState> {
       ref.read(ttsControllerProvider.notifier).setOnDrained(_onSpeechDrained);
     }
     ref.onDispose(() {
+      _messagesSub?.cancel();
+      _messagesSub = null;
       _subscribed = false;
     });
+  }
+
+  /// The socket dropped: in-flight replies will not resume, so stop their
+  /// spinners and free the composer instead of leaving the request "active".
+  void _settleInterrupted() {
+    var changed = false;
+    _messages = _messages.map((m) {
+      if (m.role != MessageRole.assistant || m.complete) return m;
+      changed = true;
+      return _settleStrayTools(
+        m.copyWith(
+          complete: true,
+          clearStatus: true,
+          errorMessage: m.content.isEmpty ? 'Connection lost' : null,
+        ),
+        ToolStepStatus.failed,
+        'Connection lost',
+      );
+    }).toList();
+    _activeRequestId = null;
+    _voiceOriginatedRequestId = null;
+    _relistenFallback?.cancel();
+    _relistenFallback = null;
+    if (!changed) return;
+    state = state.copyWith(messages: _messages);
+    _schedulePersist();
   }
 
   void startVoiceInput() {
     if (!state.online) return;
     if (_activeRequestId != null) return;
+    ref.read(voiceControllerProvider.notifier).start(sendVoiceTranscript);
+  }
+
+  /// Single entry point for a finished voice transcript, used by every voice
+  /// path (mic button, assistant gesture, continuous mode) so they behave alike.
+  Future<bool> sendVoiceTranscript(String text) {
     final cfg = ref.read(settingsControllerProvider);
-    ref.read(voiceControllerProvider.notifier).start((text) {
-      send(text, model: cfg.model, voice: true);
-    });
+    return send(text, model: cfg.model, voice: cfg.voiceReplies, fromVoice: true);
   }
 
   void setContinuousVoice(bool value) {
@@ -356,10 +413,7 @@ class ChatController extends Notifier<ChatState> {
     _voiceOriginatedRequestId = null;
     if (_activeRequestId != null) return;
     if (!state.online) return;
-    final cfg = ref.read(settingsControllerProvider);
-    ref.read(voiceControllerProvider.notifier).start((text) {
-      send(text, model: cfg.model, voice: true);
-    });
+    ref.read(voiceControllerProvider.notifier).start(sendVoiceTranscript);
   }
 
   void _handle(ServerMessage msg) {
@@ -380,7 +434,7 @@ class ChatController extends Notifier<ChatState> {
         _onVoice(voice);
       case ConfigResponseMessage config:
         _onConfigResponse(config);
-      case PongMessage() || ConnectedMessage() || GoogleAccountStatusMessage():
+      case PongMessage() || ConnectedMessage() || GoogleAccountStatusMessage() || UnknownMessage():
         break;
     }
   }
@@ -392,7 +446,11 @@ class ChatController extends Notifier<ChatState> {
   }
 
   void setAutoApprove(bool value) {
-    ref.read(connectionControllerProvider.notifier).sendConfigSet('autoApprove', value);
+    final connection = ref.read(connectionControllerProvider.notifier);
+    connection.sendConfigSet('autoApprove', value);
+    // Re-read the server's actual value so the switch reflects a rejected
+    // change (e.g. PERMISSION_DENIED for a non-admin key) or another client's.
+    connection.sendConfigGet('autoApprove');
   }
 
   ChatMessage? _bubble(String id) {
@@ -407,7 +465,8 @@ class ChatController extends Notifier<ChatState> {
   ChatMessage _ensureBubble(String requestId, {bool proactive = false, bool subagent = false}) {
     final existing = _bubble(requestId);
     if (existing != null) return existing;
-    if (!proactive) _activeRequestId ??= requestId;
+    // _activeRequestId is only ever set by send(): server-initiated requests
+    // (scheduled tasks, subagents) must not lock the composer.
     final bubble = ChatMessage(id: requestId, role: MessageRole.assistant, proactive: proactive, subagent: subagent);
     _messages = [..._messages, bubble];
     state = state.copyWith(messages: _messages);
@@ -621,11 +680,12 @@ class ChatController extends Notifier<ChatState> {
     if (updated.complete) _schedulePersist();
   }
 
-  Future<void> send(String text, {String? model, bool voice = false}) async {
-    if (text.trim().isEmpty) return;
+  /// Returns true if the message was sent.
+  Future<bool> send(String text, {String? model, bool voice = false, bool fromVoice = false}) async {
+    if (text.trim().isEmpty) return false;
     if (_activeRequestId != null) {
       state = state.copyWith(pendingError: "Jarvis is still answering — tap stop first, or wait.");
-      return;
+      return false;
     }
     final requestId = _uuid.v4();
     final sent = ref.read(connectionControllerProvider.notifier).sendChat(
@@ -637,14 +697,15 @@ class ChatController extends Notifier<ChatState> {
         );
     if (!sent) {
       state = state.copyWith(pendingError: 'Not connected to Jarvis.');
-      return;
+      return false;
     }
     _activeRequestId = requestId;
-    _voiceOriginatedRequestId = voice ? requestId : null;
+    _voiceOriginatedRequestId = (voice || fromVoice) ? requestId : null;
     final userMsg = ChatMessage(id: _uuid.v4(), role: MessageRole.user, content: text, complete: true);
     _messages = [..._messages, userMsg];
     state = state.copyWith(messages: _messages, clearError: true);
     _schedulePersist();
+    return true;
   }
 
   void speakMessage(String messageId, String text) {

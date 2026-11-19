@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show TlsException;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/status.dart' as ws_status;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -13,6 +15,17 @@ import '../background/background_connection_service.dart';
 import '../device_tools/device_tool_executor.dart';
 
 enum ConnectionStatus { disconnected, connecting, connected, retrying }
+
+/// Thrown when the configured address would use plain `ws://` but the user has
+/// not enabled the "insecure LAN" opt-in.
+class InsecureTransportException implements Exception {
+  const InsecureTransportException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
 
 class ConnectionState {
   const ConnectionState({required this.status, this.errorMessage, this.latencyMs, this.hasConnectedOnce = false});
@@ -55,6 +68,22 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   String? _host;
   String? _apiKey;
   DateTime? _lastPingSentAt;
+
+  /// Tool results / approvals that could not be sent (socket down or
+  /// reconnecting), keyed by frame type + callId so each call is sent once.
+  /// Flushed after the next device_hello.
+  ///
+  /// This relies on the server keeping device results open for a short grace
+  /// window after a disconnect (15 s) and matching replayed results and
+  /// approvals by device id + API key rather than connection id. Older servers
+  /// drop them after a reconnect, so the queue only helps against a server
+  /// with that change.
+  final Map<String, String> _outbox = {};
+  static const _outboxLimit = 100;
+  bool _helloSent = false;
+
+  /// Config requests made through [requestConfig], by message id.
+  final Map<String, Completer<Object?>> _pendingConfig = {};
   final _uuid = const Uuid();
 
   Stream<ServerMessage> get messages => _messages.stream;
@@ -70,6 +99,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
         _connectTimer?.cancel();
         _inactivityTimer?.cancel();
         _manualClose = true;
+        _closeSocket();
         _messages.close();
       });
     });
@@ -103,6 +133,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     }
     _manualClose = false;
     _reconnectAttempt = 0;
+    if (_host != host || _apiKey != apiKey) _outbox.clear();
     _host = host;
     _apiKey = apiKey;
     await ref.read(settingsControllerProvider.notifier).save(host: host, apiKey: apiKey);
@@ -123,18 +154,28 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     _heartbeat?.cancel();
     _heartbeat = null;
     _closeSocket();
+    _helloSent = false;
+    final Uri uri;
+    try {
+      uri = _webSocketUri(host, allowInsecure: ref.read(settingsControllerProvider).allowInsecureWs);
+    } on InsecureTransportException catch (e) {
+      _stopWithError(e.message);
+      return;
+    } catch (e) {
+      _failConnect('Could not reach server: $e');
+      return;
+    }
     state = state.copyWith(status: ConnectionStatus.connecting, clearError: true);
     try {
-      final uri = _webSocketUri(host, apiKey);
-      debugPrint('Jarvis connecting to ${uri.replace(query: '').toString()}');
-      final channel = WebSocketChannel.connect(uri);
+      debugPrint('Jarvis connecting to $uri');
+      // The key travels in the Authorization header, never in the URL.
+      final channel = IOWebSocketChannel.connect(uri, headers: {'Authorization': 'Bearer $apiKey'});
       _channel = channel;
       channel.ready.then(
         (_) {},
         onError: (Object e) {
-          if (identical(_channel, channel)) {
-            _failConnect('Could not reach server: $e');
-          }
+          if (!identical(_channel, channel)) return;
+          _onSocketError(uri, e, 'Could not reach server');
         },
       );
       _connectTimer?.cancel();
@@ -143,27 +184,80 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
         _closeSocket(channel);
         _scheduleReconnect('Connection timed out${host.isEmpty ? '' : ' — is $host reachable?'}');
       });
-      _pump(channel);
+      _pump(channel, uri);
     } catch (e) {
       _failConnect('Could not reach server: $e');
     }
   }
 
-  Uri _webSocketUri(String host, String apiKey) {
+  /// Builds the socket URI. Defaults to `wss://`; plain `ws://` is only used
+  /// when [allowInsecure] (the "insecure LAN" setting) is on.
+  static Uri _webSocketUri(String host, {required bool allowInsecure}) {
     var value = host.trim();
     if (!RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://').hasMatch(value)) {
-      value = 'ws://$value';
+      value = '${allowInsecure ? 'ws' : 'wss'}://$value';
     }
     final parsed = Uri.parse(value);
     final scheme = switch (parsed.scheme.toLowerCase()) {
       'https' || 'wss' => 'wss',
-      _ => 'ws',
+      'http' || 'ws' => 'ws',
+      final other => throw InsecureTransportException('Unsupported server scheme "$other://". Use wss:// or https://.'),
     };
-    return parsed.replace(
-      scheme: scheme,
-      path: '/ws',
-      queryParameters: {...parsed.queryParameters, 'key': apiKey},
-    );
+    if (scheme == 'ws' && !allowInsecure) {
+      throw const InsecureTransportException(
+        'Refusing to connect over unencrypted ws://. Use a wss:// address, or enable '
+        '"Insecure LAN (ws://)" in settings if this server is on a trusted local network.',
+      );
+    }
+    // Keep any reverse-proxy sub-path (https://host/jarvis -> wss://host/jarvis/ws).
+    var basePath = parsed.path;
+    while (basePath.endsWith('/')) {
+      basePath = basePath.substring(0, basePath.length - 1);
+    }
+    return parsed.replace(scheme: scheme, path: basePath.endsWith('/ws') ? basePath : '$basePath/ws');
+  }
+
+  static const noTlsMessage =
+      "The server doesn't seem to use TLS. Turn on Insecure LAN (ws://) in settings or set up TLS.";
+
+  /// True when [error] from opening a `wss://` socket means the server isn't
+  /// speaking TLS at all (e.g. the stock backend serving plain HTTP), as
+  /// opposed to a transient network failure worth retrying.
+  static bool looksLikeTlsMismatch(Object error) {
+    final text = error.toString();
+    // A real TLS server with a certificate we don't trust is a different
+    // problem; the "turn on Insecure LAN" advice would be wrong there.
+    if (text.contains('CERTIFICATE_VERIFY_FAILED')) return false;
+    Object? e = error;
+    if (e is WebSocketChannelException && e.inner != null) e = e.inner;
+    if (e is TlsException) return true; // includes HandshakeException
+    return text.contains('HandshakeException') ||
+        text.contains('TlsException') ||
+        text.contains('WRONG_VERSION_NUMBER') ||
+        text.contains('wrong version number') ||
+        text.contains('record overflow');
+  }
+
+  void _onSocketError(Uri uri, Object error, String prefix) {
+    // Only before the first successful connect: a TLS hiccup on an
+    // established wss setup is a network problem worth retrying.
+    if (uri.scheme == 'wss' && !state.hasConnectedOnce && looksLikeTlsMismatch(error)) {
+      _stopWithError(noTlsMessage);
+      return;
+    }
+    _failConnect('$prefix: $error');
+  }
+
+  /// A configuration problem, not a network one: report it and don't retry.
+  void _stopWithError(String message) {
+    _closeSocket();
+    _connectTimer?.cancel();
+    _inactivityTimer?.cancel();
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _connectResult?.complete(false);
+    _connectResult = null;
+    state = state.copyWith(status: ConnectionStatus.disconnected, errorMessage: message);
   }
 
   void _failConnect(String message) {
@@ -188,7 +282,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     } catch (_) {}
   }
 
-  void _pump(WebSocketChannel channel) {
+  void _pump(WebSocketChannel channel, Uri uri) {
     channel.stream.listen(
       (raw) {
         if (!identical(_channel, channel)) return;
@@ -212,6 +306,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
               state = state.copyWith(latencyMs: DateTime.now().difference(sentAt).inMilliseconds);
             }
           }
+          if (_settleConfigRequest(parsed)) return;
           _messages.add(parsed);
         } on FormatException catch (e) {
           _messages.addError(e);
@@ -220,7 +315,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
       onError: (Object e) {
         if (!identical(_channel, channel)) return;
         if (!_manualClose) {
-          _failConnect('Connection error: $e');
+          _onSocketError(uri, e, 'Connection error');
         }
       },
       onDone: () {
@@ -312,7 +407,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   }
 
   void sendToolResponse(String requestId, String callId, {required String action}) {
-    _send(JsonEncoder().convert(ToolResponseMessage(
+    _sendOrQueue('tool_response:$callId', JsonEncoder().convert(ToolResponseMessage(
       id: _uuid.v4(),
       requestId: requestId,
       callId: callId,
@@ -321,23 +416,26 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   }
 
   Future<void> _sendDeviceHello() async {
-    var cfg = ref.read(settingsControllerProvider);
-    if (cfg.deviceId == null) {
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      cfg = ref.read(settingsControllerProvider);
-    }
+    // Wait for persisted settings so the stored device id is used, not a
+    // random one generated before prefs were read.
+    await ref.read(settingsControllerProvider.notifier).loaded.timeout(const Duration(seconds: 5), onTimeout: () {});
+    final cfg = ref.read(settingsControllerProvider);
     final meta = await DeviceToolExecutor.instance.buildMeta(cfg);
-    _send(JsonEncoder().convert(DeviceHelloMessage(
+    final sent = _send(JsonEncoder().convert(DeviceHelloMessage(
       id: _uuid.v4(),
       deviceId: meta.deviceId,
       deviceName: meta.deviceName,
       deviceType: meta.deviceType,
       capabilities: meta.capabilities,
     ).toJson()));
+    if (sent) {
+      _helloSent = true;
+      _flushOutbox();
+    }
   }
 
   void sendToolExecuteResult(String requestId, String callId, DeviceToolResult result) {
-    _send(JsonEncoder().convert(ToolExecuteResultMessage(
+    _sendOrQueue('tool_execute_result:$callId', JsonEncoder().convert(ToolExecuteResultMessage(
       id: _uuid.v4(),
       requestId: requestId,
       callId: callId,
@@ -352,20 +450,96 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     _send(JsonEncoder().convert(ConfigGetMessage(id: _uuid.v4(), key: key).toJson()));
   }
 
+  /// Asks the server for config [key] and waits for the answer. Throws a
+  /// [StateError] with the server's message if it refuses, or if there's no
+  /// connection or no reply within [timeout].
+  Future<Object?> requestConfig(String key, {Duration timeout = const Duration(seconds: 10)}) async {
+    final id = _uuid.v4();
+    final completer = Completer<Object?>();
+    _pendingConfig[id] = completer;
+    try {
+      if (!_send(JsonEncoder().convert(ConfigGetMessage(id: id, key: key).toJson()))) {
+        throw StateError('Not connected to the server.');
+      }
+      return await completer.future.timeout(timeout, onTimeout: () => throw StateError('The server did not answer.'));
+    } finally {
+      _pendingConfig.remove(id);
+    }
+  }
+
+  /// Hands replies to [requestConfig] calls back to their caller. Returns true
+  /// if [msg] was consumed (errors are, so they don't show up in the chat).
+  bool _settleConfigRequest(ServerMessage msg) {
+    switch (msg) {
+      case ConfigResponseMessage(:final id, :final value):
+        _pendingConfig.remove(id)?.complete(value);
+        return false;
+      case JarvisError(:final requestId?, :final message):
+        final completer = _pendingConfig.remove(requestId);
+        if (completer == null) return false;
+        completer.completeError(StateError(message));
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /// The server's HTTP(S) base address for [host], matching the scheme the
+  /// socket uses (`wss` -> `https`, `ws` -> `http`) and keeping any sub-path.
+  static Uri httpBaseUri(String host, {required bool allowInsecure}) {
+    final ws = _webSocketUri(host, allowInsecure: allowInsecure);
+    final path = ws.path.substring(0, ws.path.length - '/ws'.length);
+    return ws.replace(scheme: ws.scheme == 'wss' ? 'https' : 'http', path: path);
+  }
+
+  /// Resolves a server-relative [path] such as `/oauth/google/start?token=…`
+  /// against [host].
+  static Uri serverUrl(String host, String path, {required bool allowInsecure}) {
+    final base = httpBaseUri(host, allowInsecure: allowInsecure);
+    final relative = Uri.parse(path);
+    return base.replace(
+      path: '${base.path}${relative.path.startsWith('/') ? '' : '/'}${relative.path}',
+      query: relative.hasQuery ? relative.query : null,
+    );
+  }
+
   void sendConfigSet(String key, Object? value) {
     _send(JsonEncoder().convert(ConfigSetMessage(id: _uuid.v4(), key: key, value: value).toJson()));
   }
 
-  void _send(String payload) {
+  /// Sends [payload]; returns false if the socket was not usable.
+  bool _send(String payload) {
     final channel = _channel;
-    if (channel == null || state.status != ConnectionStatus.connected) return;
+    if (channel == null || state.status != ConnectionStatus.connected) return false;
     try {
       channel.sink.add(payload);
+      return true;
     } catch (_) {
       if (!_manualClose) {
         _closeSocket(channel);
         _scheduleReconnect('Connection lost while sending');
       }
+      return false;
+    }
+  }
+
+  /// Sends a frame that must not be lost (tool results, approvals). If the
+  /// socket is down it is queued once per [key] and sent after reconnecting.
+  void _sendOrQueue(String key, String payload) {
+    if (_outbox.isEmpty && _helloSent && _send(payload)) return;
+    if (_outbox.containsKey(key)) return;
+    if (_outbox.length >= _outboxLimit) _outbox.remove(_outbox.keys.first);
+    _outbox[key] = payload;
+    _flushOutbox();
+  }
+
+  void _flushOutbox() {
+    if (!_helloSent || state.status != ConnectionStatus.connected) return;
+    for (final key in _outbox.keys.toList()) {
+      final payload = _outbox[key];
+      if (payload == null) continue;
+      if (!_send(payload)) return;
+      _outbox.remove(key);
     }
   }
 

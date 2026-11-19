@@ -133,7 +133,9 @@ flutter pub get
 flutter run
 ```
 
-In the app, enter the server address shown in the server log (for example `http://192.168.1.20:3000`) and the API key. On Android, the client can connect over the LAN; the manifest allows cleartext HTTP for local-network use.
+In the app, enter the server address shown in the server log (for example `192.168.1.20:3000`) and the API key. The client uses encrypted `wss://` by default, but the stock server only speaks plain HTTP. For a server on your own LAN, turn on **Insecure LAN (ws://)** in the app settings; otherwise put the server behind a TLS reverse proxy and enter its `https://` address. Installs from before this setting existed are switched to Insecure LAN automatically if their saved address had no scheme or used `ws://`.
+
+On Linux, the app stores the API key with libsecret. Building needs `libsecret-1-dev` (`sudo apt install libsecret-1-dev` on Debian/Ubuntu), and running needs `libsecret-1-0` plus a keyring such as GNOME Keyring or KWallet. If the keyring is locked or missing, the app falls back to its regular preferences file after a short timeout.
 
 ### 3. Say hello
 

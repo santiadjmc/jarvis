@@ -1,4 +1,7 @@
-import 'dart:io' show Platform, Process;
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io' show Platform, Process, ProcessSignal;
+import 'dart:typed_data' show BytesBuilder;
 
 import 'package:battery_plus/battery_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -24,13 +27,41 @@ int _notificationId = 0;
 
 Future<void> _ensureNotificationsInitialized() async {
   if (_notificationsInitialized) return;
-  _notificationsInitialized = true;
   await _localNotifications.initialize(
     settings: const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       linux: LinuxInitializationSettings(defaultActionName: 'Open Jarvis'),
     ),
   );
+  // Only after success, so a failed initialize is retried next time.
+  _notificationsInitialized = true;
+}
+
+/// `+` and 2-15 digits, `00` and up to 15 more (international prefix), or a
+/// plain 2-15 digit number (local numbers and short service codes).
+final _phoneNumberPattern = RegExp(r'^(?:\+[0-9]{2,15}|00[0-9]{2,15}|[0-9]{2,15})$');
+
+/// Pause (`,`) and wait (`;`) characters followed by extension digits.
+final _dialSuffixPattern = RegExp(r'^[,;][0-9,;]*$');
+
+/// Normalizes a dialable phone number, or returns null when it is not one.
+///
+/// Strips a `tel:` prefix and common separators, then accepts digits with an
+/// optional leading `+` or `00`. With [allowPauses], a `,`/`;` suffix for
+/// extensions is kept (`+1 555 123 4567,,123`). MMI/USSD codes (anything with
+/// `*` or `#`) and other dialer strings are always rejected.
+String? normalizePhoneNumber(String raw, {bool allowPauses = false}) {
+  if (raw.contains('*') || raw.contains('#')) return null;
+  var cleaned = raw.trim();
+  if (cleaned.toLowerCase().startsWith('tel:')) cleaned = cleaned.substring(4);
+  cleaned = cleaned.replaceAll(RegExp(r';ext=', caseSensitive: false), ',').replaceAll(RegExp(r'[\s\-().]'), '');
+  final pause = cleaned.indexOf(RegExp(r'[,;]'));
+  final main = pause < 0 ? cleaned : cleaned.substring(0, pause);
+  final suffix = pause < 0 ? '' : cleaned.substring(pause);
+  if (!_phoneNumberPattern.hasMatch(main)) return null;
+  if (suffix.isEmpty) return main;
+  if (!allowPauses || !_dialSuffixPattern.hasMatch(suffix)) return null;
+  return '$main$suffix';
 }
 
 class DeviceToolResult {
@@ -127,6 +158,10 @@ class DeviceToolExecutor {
   DeviceToolExecutor._();
 
   static final DeviceToolExecutor instance = DeviceToolExecutor._();
+
+  static const _smsMaxChars = 1000;
+  static const _smsMaxPerHour = 10;
+  final List<DateTime> _smsSentAt = [];
 
   Future<DeviceMeta> buildMeta(AppConfig config) async {
     String? model;
@@ -351,10 +386,19 @@ class DeviceToolExecutor {
       if (direct == true) return DeviceToolResult(success: true, data: {'launched': app, 'via': 'package_name'});
 
       final apps = await InstalledApps.getInstalledApps();
-      final match = apps.cast<AppInfo?>().firstWhere(
-            (a) => a!.name.toLowerCase().contains(app.toLowerCase()),
-            orElse: () => null,
-          );
+      final wanted = app.toLowerCase();
+      AppInfo? firstWhereName(bool Function(String name) test) {
+        for (final a in apps) {
+          if (test(a.name.toLowerCase())) return a;
+        }
+        return null;
+      }
+
+      // Prefer an exact name, then a prefix; substring matches only for
+      // queries long enough not to hit an arbitrary app (e.g. "a").
+      final match = firstWhereName((n) => n == wanted) ??
+          firstWhereName((n) => n.startsWith(wanted)) ??
+          (wanted.length >= 3 ? firstWhereName((n) => n.contains(wanted)) : null);
       if (match == null) return DeviceToolResult.failure('No installed app found matching "$app"');
       final launched = await InstalledApps.startApp(match.packageName);
       return launched == true
@@ -405,8 +449,13 @@ class DeviceToolExecutor {
   }
 
   Future<DeviceToolResult> _callNumber(Map<String, dynamic> params) async {
-    final number = (params['number'] as String?)?.trim() ?? '';
-    if (number.isEmpty) return DeviceToolResult.failure('number is required');
+    final raw = (params['number'] as String?)?.trim() ?? '';
+    if (raw.isEmpty) return DeviceToolResult.failure('number is required');
+    final number = normalizePhoneNumber(raw, allowPauses: true);
+    if (number == null) {
+      return DeviceToolResult.failure(
+          'Invalid phone number: use digits with an optional leading + or 00, optionally followed by , or ; and an extension (no * or # codes)');
+    }
     try {
       final called = await FlutterPhoneDialer.callNumber(number);
       return called
@@ -418,15 +467,29 @@ class DeviceToolExecutor {
   }
 
   Future<DeviceToolResult> _sendSms(Map<String, dynamic> params) async {
-    final number = (params['number'] as String?)?.trim() ?? '';
+    final raw = (params['number'] as String?)?.trim() ?? '';
     final message = (params['message'] as String?) ?? '';
-    if (number.isEmpty) return DeviceToolResult.failure('number is required');
+    if (raw.isEmpty) return DeviceToolResult.failure('number is required');
     if (message.isEmpty) return DeviceToolResult.failure('message is required');
+    final number = normalizePhoneNumber(raw);
+    if (number == null) {
+      return DeviceToolResult.failure('Invalid phone number: use digits with an optional leading + or 00 (no * or # codes, no extensions)');
+    }
+    if (message.length > _smsMaxChars) {
+      return DeviceToolResult.failure('message is too long (max $_smsMaxChars characters)');
+    }
+    final now = DateTime.now();
+    _smsSentAt.removeWhere((t) => now.difference(t) > const Duration(hours: 1));
+    if (_smsSentAt.length >= _smsMaxPerHour) {
+      return DeviceToolResult.failure('SMS rate limit reached ($_smsMaxPerHour per hour); try again later');
+    }
     try {
       if (!await _telephonySms.requestPermission()) {
         return DeviceToolResult.failure('SMS permission denied');
       }
       await _telephonySms.sendSMS(phone: number, message: message);
+      // Only successful sends count against the hourly limit.
+      _smsSentAt.add(now);
       return DeviceToolResult(success: true, data: {'to': number, 'sentChars': message.length});
     } on TelephonySmsException catch (e) {
       return DeviceToolResult.failure(e.toString());
@@ -472,6 +535,9 @@ class DeviceToolExecutor {
     final text = params['text'] as String?;
     final x = (params['x'] as num?)?.toInt();
     final y = (params['y'] as num?)?.toInt();
+    if ((x == null || y == null) && (text == null || text.trim().isEmpty)) {
+      return DeviceToolResult.failure('Provide either x and y coordinates or a non-empty text to tap');
+    }
     try {
       final ok = (x != null && y != null)
           ? await AccessibilityService.tapAt(x, y)
@@ -532,6 +598,8 @@ class DeviceToolExecutor {
     }
   }
 
+  static const _whatsappPackages = {'com.whatsapp', 'com.whatsapp.w4b'};
+
   Future<DeviceToolResult> _sendWhatsappMessage(Map<String, dynamic> params) async {
     final gate = await _requireAccessibility();
     if (!gate.success) return gate;
@@ -544,9 +612,24 @@ class DeviceToolExecutor {
       if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
         return DeviceToolResult.failure('Could not open WhatsApp');
       }
-      await Future<void>.delayed(const Duration(milliseconds: 2500));
-      var sent = await AccessibilityService.tapNode(viewId: 'com.whatsapp:id/send');
-      if (!sent) sent = await AccessibilityService.tapNode(text: 'Send');
+      // Wait for WhatsApp itself to be in the foreground; never tap "Send" in
+      // whatever other app (browser, mail, bank) happens to be showing.
+      String? package;
+      for (var i = 0; i < 10; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        package = await AccessibilityService.foregroundPackage();
+        if (_whatsappPackages.contains(package)) break;
+      }
+      if (!_whatsappPackages.contains(package)) {
+        return DeviceToolResult.failure(
+          'WhatsApp did not come to the foreground (found ${package ?? 'unknown app'}); message not sent',
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      if (await AccessibilityService.foregroundPackage() != package) {
+        return DeviceToolResult.failure('WhatsApp left the foreground before sending; message not sent');
+      }
+      final sent = await AccessibilityService.tapNode(viewId: '$package:id/send');
       return sent
           ? DeviceToolResult(success: true, data: {'to': number, 'sentChars': message.length})
           : DeviceToolResult.failure('Opened WhatsApp with the message ready but could not find/tap the Send button');
@@ -559,18 +642,77 @@ class DeviceToolExecutor {
     final command = (params['command'] as String?) ?? '';
     if (command.trim().isEmpty) return DeviceToolResult.failure('command is required');
     const timeout = Duration(seconds: 30);
+    const maxOutputBytes = 64 * 1024;
     try {
       final shell = Platform.isAndroid ? '/system/bin/sh' : 'sh';
-      final process = await Process.run(shell, ['-c', command]).timeout(timeout);
-      return DeviceToolResult(success: true, data: {
-        'exitCode': process.exitCode,
-        'stdout': (process.stdout as String).trim(),
-        'stderr': (process.stderr as String).trim(),
-      });
+      final process = await Process.start(shell, ['-c', command]);
+      final stdoutBuf = _CappedOutput(maxOutputBytes);
+      final stderrBuf = _CappedOutput(maxOutputBytes);
+      final stdoutSub = process.stdout.listen(stdoutBuf.add);
+      final stderrSub = process.stderr.listen(stderrBuf.add);
+      var timedOut = false;
+      int exitCode;
+      try {
+        exitCode = await process.exitCode.timeout(timeout);
+      } on TimeoutException {
+        // Previously the timeout only stopped waiting and left the process running.
+        timedOut = true;
+        await _killProcessTree(process.pid);
+        process.kill(ProcessSignal.sigkill);
+        exitCode = await process.exitCode.timeout(const Duration(seconds: 2), onTimeout: () => -1);
+      }
+      // Grandchildren may still hold the pipes open; don't wait on them forever.
+      await Future.wait([stdoutSub.asFuture<void>(), stderrSub.asFuture<void>()])
+          .timeout(const Duration(seconds: 2), onTimeout: () => const <void>[]);
+      await stdoutSub.cancel();
+      await stderrSub.cancel();
+      final data = {
+        'exitCode': exitCode,
+        'stdout': stdoutBuf.text.trim(),
+        'stderr': stderrBuf.text.trim(),
+        if (stdoutBuf.truncated || stderrBuf.truncated) 'truncated': true,
+        if (timedOut) 'timedOut': true,
+      };
+      if (timedOut) {
+        return DeviceToolResult(success: false, data: data, error: 'Command timed out after ${timeout.inSeconds}s and was killed');
+      }
+      return DeviceToolResult(success: true, data: data);
     } catch (e) {
       return DeviceToolResult.failure('$e');
     }
   }
+
+  /// Best effort: kill direct children of the shell first so `sh -c 'a | b'`
+  /// pipelines do not outlive the timeout.
+  static Future<void> _killProcessTree(int pid) async {
+    try {
+      await Process.run('pkill', ['-KILL', '-P', '$pid']).timeout(const Duration(seconds: 2));
+    } catch (_) {}
+  }
+}
+
+class _CappedOutput {
+  _CappedOutput(this.limit);
+
+  final int limit;
+  final BytesBuilder _bytes = BytesBuilder(copy: false);
+  bool truncated = false;
+
+  void add(List<int> chunk) {
+    final room = limit - _bytes.length;
+    if (room <= 0) {
+      truncated = true;
+      return;
+    }
+    if (chunk.length > room) {
+      _bytes.add(chunk.sublist(0, room));
+      truncated = true;
+    } else {
+      _bytes.add(chunk);
+    }
+  }
+
+  String get text => utf8.decode(_bytes.toBytes(), allowMalformed: true);
 }
 
 final deviceToolExecutorProvider = Provider<DeviceToolExecutor>((ref) => DeviceToolExecutor.instance);
