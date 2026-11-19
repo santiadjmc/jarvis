@@ -572,6 +572,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             this.sendError(client.id, "GENERATE_ERROR", err.message, requestId);
         } finally {
             streamManager.complete(requestId);
+            this.voiceRequests.delete(requestId);
         }
     }
 
@@ -965,6 +966,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
     }
 
     private clearSpeech(requestId: string): void {
+        this.voiceRequests.delete(requestId);
         this.speechBuffer.delete(requestId);
         this.speechSeq.delete(requestId);
         this.speechTail.delete(requestId);
