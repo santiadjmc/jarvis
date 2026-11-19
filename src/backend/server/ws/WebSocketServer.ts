@@ -11,6 +11,9 @@ import MessageRouter from "./MessageRouter";
 import authService from "../../auth/AuthService";
 import Log from "../../Log";
 
+/** Close reason (max 123 bytes) for clients that still send ?key=. */
+export const LEGACY_QUERY_KEY_MESSAGE = "Outdated client: ?key= is no longer accepted. Update the app so it sends Authorization: Bearer <key>.";
+
 class JarvisWebSocketServer {
     private wss: WSServer | null = null;
     private readonly MAX_PAYLOAD = 4 * 1024 * 1024;
@@ -84,8 +87,15 @@ class JarvisWebSocketServer {
 
         const apiKey = this.extractApiKey(req);
         if (!apiKey) {
+            if (this.hasQueryKey(req)) {
+                // Old clients put the key in ?key=; that was dropped on purpose (it leaks
+                // into proxy logs and history), so tell them how to fix it.
+                Log.warn("WS rejected: API key sent as ?key= query parameter; the client needs updating", { remoteAddress });
+                ws.close(4001, LEGACY_QUERY_KEY_MESSAGE);
+                return;
+            }
             Log.warn("WS rejected: missing API key", { remoteAddress });
-            ws.close(4001, "Missing API key");
+            ws.close(4001, "Missing API key: send it as an Authorization: Bearer header");
             return;
         }
 
@@ -181,6 +191,14 @@ class JarvisWebSocketServer {
         const messageId = data.subarray(0, 16).toString("utf-8");
         const audioData = data.subarray(16);
         MessageRouter.routeBinary(client, messageId, audioData);
+    }
+
+    private hasQueryKey(req: IncomingMessage): boolean {
+        try {
+            return new URL(req.url || "/", "http://localhost").searchParams.has("key");
+        } catch {
+            return false;
+        }
     }
 
     private extractApiKey(req: IncomingMessage): string | null {

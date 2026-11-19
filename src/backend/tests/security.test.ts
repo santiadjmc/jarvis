@@ -384,8 +384,18 @@ test("WS auth accepts only the Authorization Bearer header, not ?key= (sec L2)",
 
     const ip = "198.51.100.23";
     let closedWith = 0;
-    const fakeWs = { close: (code: number) => { closedWith = code; }, on: () => {}, readyState: 1, send: () => {} };
+    let reason = "";
+    const fakeWs = { close: (code: number, why: string) => { closedWith = code; reason = why; }, on: () => {}, readyState: 1, send: () => {} };
     ws.handleConnection(fakeWs, { url: `/ws?key=${good.key}`, headers: {}, socket: { remoteAddress: ip } });
     assert.notEqual(closedWith, 0, "a key in the query string must not authenticate");
+    // The client is told what to change instead of getting a bare "missing key".
+    assert.equal(closedWith, 4001);
+    assert.match(reason, /Authorization: Bearer/);
+    assert.match(reason, /\?key=/);
+    assert.ok(Buffer.byteLength(reason) <= 123, "WebSocket close reasons are limited to 123 bytes");
+    assert.equal(ws.authFailures.has(ip), false, "an outdated client doesn't count towards the lockout");
+
+    ws.handleConnection(fakeWs, { url: "/ws", headers: {}, socket: { remoteAddress: ip } });
+    assert.match(reason, /Authorization: Bearer/);
     ws.authFailures.delete(ip);
 });
