@@ -59,15 +59,16 @@ class ToolStep {
     );
   }
 
-  /// Used for session.json. Device tool params/results (contacts, location,
-  /// SMS text, clipboard, screen dumps, shell output) are not persisted.
+  /// Used for session.json. Device tool params/results/errors (contacts,
+  /// location, SMS text, clipboard, screen dumps, shell output, phone numbers
+  /// echoed in error messages) are not persisted.
   Map<String, dynamic> toJson() => {
         'callId': callId,
         'name': name,
         'params': isDeviceTool ? const <String, dynamic>{} : params,
         'requiresApproval': requiresApproval,
         'status': status.name,
-        if (error != null) 'error': error,
+        if (error != null) 'error': isDeviceTool ? 'Failed' : error,
         if (result != null && !isDeviceTool) 'result': result,
         if (executor != null) 'executor': executor,
       };
@@ -277,12 +278,19 @@ class ChatController extends Notifier<ChatState> {
           debugPrint('Jarvis: skipping unreadable history entry: $e');
         }
       }
+      // Rewrite the file in its current redacted form, so details saved by
+      // older versions don't stay on disk until the next reply.
+      _schedulePersist();
       if (loaded.isEmpty) return;
+      // If the user already sent something under a fresh session id before
+      // the file was read, the server has no context for the old history:
+      // keep the sessions apart instead of showing them as one conversation.
+      final userAlreadySent = _messages.any((m) => m.role == MessageRole.user);
+      if (userAlreadySent && loadedId != _sessionId) return;
+      if (loadedId != null) _sessionId = loadedId;
       // Frames may have arrived while the file was read: merge history in
       // front of them instead of replacing them.
       final liveIds = _messages.map((m) => m.id).toSet();
-      final userAlreadySent = _messages.any((m) => m.role == MessageRole.user);
-      if (!userAlreadySent && loadedId != null) _sessionId = loadedId;
       _messages = [...loaded.where((m) => !liveIds.contains(m.id)), ..._messages];
       for (final m in loaded) {
         for (final t in m.tools) {
