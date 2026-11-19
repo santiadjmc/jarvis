@@ -153,6 +153,7 @@ async function boot(): Promise<void> {
             return;
         }
         client.metadata.deviceId = message.deviceId;
+        resultBroker.deviceReconnected(message.deviceId, client.apiKeyId);
         client.metadata.deviceName = message.deviceName || message.deviceId.slice(0, 8);
         client.metadata.deviceType = message.deviceType || "unknown";
         client.metadata.capabilities = message.capabilities || [];

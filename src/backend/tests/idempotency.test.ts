@@ -52,6 +52,30 @@ test("disconnect fails pending results once the grace window passes", async () =
     assert.equal(outcome.error, "gone");
 });
 
+test("a device that reconnects within the grace window cancels the disconnect timer", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const requestId = crypto.randomUUID();
+    const deviceId = crypto.randomUUID();
+    const pending = resultBroker.wait(requestId, "call_back", crypto.randomUUID(), 90_000, undefined, deviceId, "key-a");
+    const other = resultBroker.wait(requestId, "call_other", crypto.randomUUID(), 90_000, undefined, deviceId, "key-a");
+
+    resultBroker.failForDevice(deviceId, "Device disconnected before returning tool result", 15_000);
+    // A hello for the same deviceId under another key doesn't save the call.
+    assert.equal(resultBroker.deviceReconnected(deviceId, "key-b"), 0);
+    assert.equal(resultBroker.deviceReconnected(deviceId, "key-a"), 2);
+
+    t.mock.timers.tick(20_000);
+    // Still pending well past the 15 s grace: the result from the new connection lands.
+    assert.equal(resultBroker.resolve(crypto.randomUUID(), requestId, "call_back", ok("done"), deviceId, "key-a"), "accepted");
+    assert.equal((await pending).data, "done");
+
+    // The normal tool timeout still applies.
+    t.mock.timers.tick(70_000);
+    const timedOut = await other;
+    assert.equal(timedOut.success, false);
+    assert.match(String(timedOut.error), /did not respond in time/);
+});
+
 test("result from a different API key is rejected even with the right deviceId", async () => {
     const requestId = crypto.randomUUID();
     const conn = crypto.randomUUID();

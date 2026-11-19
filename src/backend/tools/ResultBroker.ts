@@ -152,6 +152,24 @@ class ResultBroker {
         }
     }
 
+    /**
+     * Called when a device says hello again. Its pending calls stop counting down
+     * the disconnect grace period; they still have their normal timeout, and the
+     * device can deliver the result from the new connection.
+     */
+    deviceReconnected(deviceId: string, apiKeyId?: string): number {
+        let resumed = 0;
+        for (const entry of this.pending.values()) {
+            if (entry.deviceId !== deviceId || !entry.graceTimer) continue;
+            if (entry.ownerKeyId !== undefined && entry.ownerKeyId !== apiKeyId) continue;
+            clearTimeout(entry.graceTimer);
+            entry.graceTimer = undefined;
+            resumed++;
+        }
+        if (resumed > 0) Log.info("Device reconnected with pending tool results", { deviceId, pending: resumed });
+        return resumed;
+    }
+
     abortRequest(requestId: string): void {
         let aborted = 0;
         for (const [k, entry] of [...this.pending]) {
