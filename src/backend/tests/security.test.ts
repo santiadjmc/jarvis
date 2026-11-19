@@ -8,6 +8,7 @@ import authService from "../auth/AuthService";
 import deviceRegistry from "../server/ws/DeviceRegistry";
 import resultBroker from "../tools/ResultBroker";
 import fileTools from "../tools/implementations/fs";
+import { stripMarkup } from "../tools/implementations/web";
 
 test("device ids are bound to the authenticating key; spoofed results are rejected (H3)", async () => {
     const deviceId = crypto.randomUUID();
@@ -124,5 +125,20 @@ test("malformed Host header on WS upgrade does not crash the server (C1)", async
     } finally {
         wsServer.stop();
         await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+});
+
+test("fetch_url HTML stripping is linear-time and still strips markup (H4)", () => {
+    const html = '<html><head><style>body{x:1}</style><SCRIPT>var a = "<b>";</SCRIPT></head>' +
+        '<body><p class="x">Hello&nbsp;<b>world</b> &amp; 1 &lt; 2</p><>tail<noscript>ns</noscript></body></html>';
+    assert.equal(stripMarkup(html, "text/html"), "Hello world & 1 < 2 <>tail");
+    assert.equal(stripMarkup("a < b and c", "text/html"), "a < b and c");
+    assert.equal(stripMarkup('{"a":"<b>"}', "application/json"), '{"a":"<b>"}');
+
+    for (const payload of ["<".repeat(262144), "<script".repeat(37449), "<a".repeat(131072), "<style><".repeat(32768)]) {
+        const started = Date.now();
+        stripMarkup(payload, "text/html");
+        const elapsed = Date.now() - started;
+        assert.ok(elapsed < 1000, `stripMarkup took ${elapsed}ms on a ${payload.length}-char adversarial input`);
     }
 });

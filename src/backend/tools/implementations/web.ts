@@ -82,13 +82,55 @@ const fetchUrl: ToolSpec = {
     },
 };
 
-function stripMarkup(text: string, contentType: string): string {
+const RAW_TEXT_TAGS = ["script", "style", "noscript"];
+
+/**
+ * Strips HTML to visible text in a single linear pass. The previous
+ * regex-based version (`/<[^>]+>/g`, lazy `<script[\s\S]*?<\/script>`) was
+ * O(n^2) on inputs with many unclosed `<`, blocking the event loop.
+ */
+export function stripMarkup(text: string, contentType: string): string {
     if (/json|xml/.test(contentType)) return text.trim();
-    return text
-        .replace(/<script[\s\S]*?<\/script>/gi, " ")
-        .replace(/<style[\s\S]*?<\/style>/gi, " ")
-        .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
-        .replace(/<[^>]+>/g, " ")
+    // ASCII-only lowercase keeps indices aligned with `text`.
+    const lower = text.replace(/[A-Z]+/g, m => m.toLowerCase());
+    const missingClose = new Set<string>();
+    const out: string[] = [];
+    let i = 0;
+    while (i < text.length) {
+        const lt = text.indexOf("<", i);
+        if (lt === -1) {
+            out.push(text.slice(i));
+            break;
+        }
+        out.push(text.slice(i, lt));
+
+        const rawTag = RAW_TEXT_TAGS.find(tag => !missingClose.has(tag) && lower.startsWith(tag, lt + 1));
+        if (rawTag) {
+            const closeTag = `</${rawTag}>`;
+            const close = lower.indexOf(closeTag, lt + 1 + rawTag.length);
+            if (close !== -1) {
+                out.push(" ");
+                i = close + closeTag.length;
+                continue;
+            }
+            missingClose.add(rawTag);
+        }
+
+        const gt = text.indexOf(">", lt + 1);
+        if (gt === -1) {
+            // No later '>' exists, so no later '<' can start a tag either.
+            out.push(text.slice(lt));
+            break;
+        }
+        if (gt === lt + 1) {
+            out.push("<");
+            i = lt + 1;
+            continue;
+        }
+        out.push(" ");
+        i = gt + 1;
+    }
+    return out.join("")
         .replace(/&nbsp;/gi, " ")
         .replace(/&amp;/gi, "&")
         .replace(/&lt;/gi, "<")
