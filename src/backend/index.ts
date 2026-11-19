@@ -19,6 +19,7 @@ import { listDueTasks } from "./agent/Scheduler/taskStore";
 import { isAutoApproveEnabled, setAutoApprove } from "./agent/runtimeConfig";
 import { status as googleStatus, isConfigured as googleConfigured } from "./agent/Google/googleAuth";
 import { getLocalAddresses } from "./utils/network";
+import { closeBrowser } from "./agent/Browser/browserSession";
 import type { AuthenticatedClient } from "./types/ws";
 import Log from "./Log";
 import { v4 as uuid } from "uuid";
@@ -225,6 +226,7 @@ async function boot(): Promise<void> {
     process.on("SIGINT", async () => {
         Log.info("Shutting down Jarvis...");
         conversationManager.stop();
+        await closeBrowser();
         await cacheManager.shutdown();
         await server.stop();
         process.exit(0);
@@ -233,6 +235,7 @@ async function boot(): Promise<void> {
     process.on("SIGTERM", async () => {
         Log.info("Shutting down Jarvis...");
         conversationManager.stop();
+        await closeBrowser();
         await cacheManager.shutdown();
         await server.stop();
         process.exit(0);
