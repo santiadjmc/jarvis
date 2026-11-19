@@ -3,6 +3,29 @@ import test from "node:test";
 import http from "node:http";
 import net from "node:net";
 import wsServer from "../server/ws/WebSocketServer";
+import messageRouter from "../server/ws/MessageRouter";
+import authService from "../auth/AuthService";
+
+test("chat requires chat:send permission (M1)", async () => {
+    const sent: any[] = [];
+    let handled = 0;
+    messageRouter.setAIHandler(async () => { handled++; });
+    const fakeWs = { readyState: 1, send: (s: string) => sent.push(JSON.parse(s)) };
+    const noChat = authService.generateKey("no-chat", "user", ["voice:receive"]);
+    const withChat = authService.generateKey("with-chat", "user");
+    const client = (keyId: string) => ({ id: crypto.randomUUID(), ws: fakeWs, apiKeyId: keyId, role: "user", metadata: {} }) as any;
+    const msg = { type: "chat", id: crypto.randomUUID(), content: "hi" } as any;
+
+    await messageRouter.route(client(noChat.id), msg);
+    assert.equal(handled, 0);
+    assert.equal(sent[0]?.code, "PERMISSION_DENIED");
+
+    await messageRouter.route(client(withChat.id), msg);
+    assert.equal(handled, 1);
+
+    // A default "user" key can chat but must not be able to drive tools.
+    assert.equal(authService.hasPermission(withChat.id, "tools:execute"), false);
+});
 
 test("malformed Host header on WS upgrade does not crash the server (C1)", async () => {
     const server = http.createServer();

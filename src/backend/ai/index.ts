@@ -17,6 +17,7 @@ import type { ToolResult } from "../tools/types";
 import { searchMemory } from "../agent/Memory/memoryStore";
 import { markRan, type ScheduledTask } from "../agent/Scheduler/taskStore";
 import { isAutoApproveEnabled } from "../agent/runtimeConfig";
+import authService from "../auth/AuthService";
 import { registerSubagentRunner, type SubagentRequest } from "../agent/Subagent/subagentRunner";
 import Log from "../Log";
 
@@ -109,8 +110,11 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         const abortController = existingAbort ?? new AbortController();
         const streamId = existingStreamId ?? streamManager.create(client.id, conversationId, model, abortController);
         const turns = maxToolTurns();
-        const toolDefs = toolRegistry.defsForOllama();
-        const approvalsAuto = isAutoApproveEnabled();
+        // Tool use (including approval-free tools) requires tools:execute; global
+        // autoApprove is only honoured for admin keys.
+        const canUseTools = authService.hasPermission(client.apiKeyId, "tools:execute");
+        const toolDefs = canUseTools ? toolRegistry.defsForOllama() : [];
+        const approvalsAuto = isAutoApproveEnabled() && authService.hasPermission(client.apiKeyId, "admin:*");
         const voiceRequested = this.voiceRequests.has(streamId);
 
         this.sendStatus(client.id, tier === "deep" ? "reasoning" : "generating", streamId);
@@ -270,6 +274,19 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                     role: "tool",
                     content: JSON.stringify({ success: false, error: "Malformed tool call: missing name" }),
                     timestamp: Date.now(),
+                    tool_call_id: callId,
+                });
+                continue;
+            }
+
+            if (!authService.hasPermission(client.apiKeyId, "tools:execute")) {
+                const denied: ToolResult = { success: false, data: null, error: "This API key is not allowed to execute tools.", executionTimeMs: 0 };
+                connectionManager.send(client.id, JSON.stringify(toolRegistry.sendable(name, denied, { requestId, callId })));
+                conversationManager.addMessage(conversationId, {
+                    role: "tool",
+                    content: toolRegistry.serializeForModel(name, denied),
+                    timestamp: Date.now(),
+                    tool_name: name,
                     tool_call_id: callId,
                 });
                 continue;

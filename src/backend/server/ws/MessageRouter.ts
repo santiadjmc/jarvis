@@ -4,6 +4,7 @@ import type { AuthenticatedClient, ServerMessage } from "../../types/ws";
 import type { ValidatedClientMessage } from "./Protocol";
 import connectionManager from "./ConnectionManager";
 import streamManager from "./StreamManager";
+import authService from "../../auth/AuthService";
 import Log from "../../Log";
 
 type MessageHandler = (client: AuthenticatedClient, message: ValidatedClientMessage) => Promise<void> | void;
@@ -44,6 +45,11 @@ class MessageRouter {
         }
 
         if (message.type === "chat" && this.aiHandler) {
+            if (!authService.hasPermission(client.apiKeyId, "chat:send")) {
+                Log.warn("Chat rejected: missing chat:send permission", { clientId: client.id, role: client.role });
+                this.sendError(client.ws, "PERMISSION_DENIED", "This API key is not allowed to send chat messages.", message.id);
+                return;
+            }
             try {
                 await this.aiHandler(client, message);
             } catch (err: any) {
