@@ -271,15 +271,18 @@ class ChatController extends Notifier<ChatState> {
           .map((m) => ChatMessage.fromJson(m as Map<String, dynamic>))
           .toList();
       if (loaded.isEmpty) return;
-      _sessionId = loadedId;
-      _messages = loaded;
-      _callToMessage.clear();
+      // Frames may have arrived while the file was read: merge history in
+      // front of them instead of replacing them.
+      final liveIds = _messages.map((m) => m.id).toSet();
+      final userAlreadySent = _messages.any((m) => m.role == MessageRole.user);
+      if (!userAlreadySent && loadedId != null) _sessionId = loadedId;
+      _messages = [...loaded.where((m) => !liveIds.contains(m.id)), ..._messages];
       for (final m in loaded) {
         for (final t in m.tools) {
-          _callToMessage[t.callId] = m.id;
+          _callToMessage.putIfAbsent(t.callId, () => m.id);
         }
       }
-      state = ChatState(messages: _messages, sessionId: loadedId, online: state.online);
+      state = state.copyWith(messages: _messages, sessionId: _sessionId);
     } catch (e) {
       stderr.writeln('Failed to load session: $e');
     }
