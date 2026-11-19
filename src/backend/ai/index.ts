@@ -25,6 +25,7 @@ import {
     createProvenance, guardsEnabled, logGuard, noteToolResult, snapshotProvenance,
     taintedRunTools, taintedSubagentMax, type ProvenanceState,
 } from "../utils/provenance";
+import { checkOutbound, isLocalDataSource, recordLocalData, redactSecrets } from "../utils/egressGuard";
 
 function maxSubagents(): number {
     const parsed = parseInt(process.env.JARVIS_MAX_SUBAGENTS || "3", 10);
@@ -381,6 +382,20 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
             const spec = toolRegistry.get(name);
             const approvalRequired = spec?.requiresApproval ?? toolRegistry.requiresApproval(name);
+
+            const egressBlock = this.checkEgress(conversationId, name, params, true);
+            if (egressBlock) {
+                const blocked: ToolResult = { success: false, data: null, error: egressBlock, executionTimeMs: 0 };
+                connectionManager.send(client.id, JSON.stringify(toolRegistry.sendable(name, blocked, { requestId, callId })));
+                conversationManager.addMessage(conversationId, {
+                    role: "tool",
+                    content: toolRegistry.serializeForModel(name, blocked),
+                    timestamp: Date.now(),
+                    tool_name: name,
+                    tool_call_id: callId,
+                });
+                continue;
+            }
 
             if (spec?.runtime === "device") {
                 await this.executeDeviceTool(client, conversationId, requestId, callId, name, params, signal, approvalsAuto);
@@ -964,6 +979,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             }
 
             let result: ToolResult;
+            const egressBlock = this.checkEgress(conversationId, name, params, false);
             if (!toolRegistry.isSafeForAutonomousRun(name)) {
                 result = {
                     success: false,
@@ -971,6 +987,8 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                     error: `${name} requires live user approval and cannot run in an autonomous/proactive task.`,
                     executionTimeMs: 0,
                 };
+            } else if (egressBlock) {
+                result = { success: false, data: null, error: egressBlock, executionTimeMs: 0 };
             } else if (allowed && !allowed.has(name)) {
                 logGuard("tool blocked in external-origin run", { conversationId, tool: name });
                 result = {
@@ -1004,11 +1022,34 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         return { clientId, requestId, provenance: snapshotProvenance(this.provenanceFor(conversationId)) };
     }
 
-    /** Serializes a tool result for the model and updates the conversation's taint state. */
+    /**
+     * Serializes a tool result for the model and updates the conversation's taint
+     * state. In a tainted conversation, secret-looking strings are redacted.
+     */
     private toolResultForModel(conversationId: string, name: string, result: ToolResult): string {
         const state = this.provenanceFor(conversationId);
-        if (state) noteToolResult(state, name, result, conversationId);
-        return toolRegistry.serializeForModel(name, result);
+        const serialized = toolRegistry.serializeForModel(name, result);
+        if (!state) return serialized;
+        if (result.success && isLocalDataSource(name)) recordLocalData(state, result.data);
+        noteToolResult(state, name, result, conversationId);
+        if (!state.tainted || !guardsEnabled()) return serialized;
+        const { text, count } = redactSecrets(serialized);
+        if (count > 0) logGuard("redacted secrets from tool result", { conversationId, tool: name, count });
+        return text;
+    }
+
+    /**
+     * Outbound guard for tainted conversations; returns the block reason or null.
+     * URLs the user typed in this conversation are exempt (interactive turns only).
+     */
+    private checkEgress(conversationId: string, name: string, params: Record<string, unknown>, interactive: boolean): string | null {
+        const conversation = conversationManager.get(conversationId);
+        const userTexts = interactive && conversation
+            ? conversation.messages.filter(m => m.role === "user" && typeof m.content === "string").map(m => m.content as string)
+            : [];
+        const reason = checkOutbound(name, params, this.provenanceFor(conversationId), userTexts);
+        if (reason) logGuard("outbound call blocked", { conversationId, tool: name, reason });
+        return reason;
     }
 
     /**

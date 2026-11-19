@@ -31,6 +31,9 @@ export interface Provenance {
 export interface ProvenanceState {
     tainted: boolean;
     sources: Set<string>;
+    /** Fingerprints of local data read in this conversation (see egressGuard). */
+    localShingles?: Set<string>;
+    localText?: string;
 }
 
 /** Tools whose output is external content the user didn't write. */
