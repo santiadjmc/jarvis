@@ -11,7 +11,6 @@ function serializeTask(t: ScheduledTask) {
         dueAt: new Date(t.dueAt).toISOString(),
         repeatEveryMinutes: t.recurringEveryMs ? t.recurringEveryMs / 60000 : null,
         origin: t.origin ?? "user",
-        ...(t.expiresAt ? { expiresAt: new Date(t.expiresAt).toISOString() } : {}),
     };
 }
 
@@ -58,26 +57,20 @@ const scheduleTask: ToolSpec = {
             // restricted tool set (see runProactiveTask), and the task is capped.
             const limits = taintedTaskLimits();
             const sources = ctx.provenance.sources;
-            const now = Date.now();
             const existing = listTasks().filter(t => t.origin === "external").length;
             if (existing >= limits.maxTasks) {
                 logGuard("schedule_task rejected (external-origin task cap)", { clientId: ctx.clientId, sources, existing, max: limits.maxTasks });
                 return { success: false, data: null, error: `This conversation has read external content, and ${existing} task(s) created that way already exist (max ${limits.maxTasks}). Ask the user to cancel one or to schedule it in a new conversation.` };
             }
-            const expiresAt = now + limits.ttlMs;
-            if (dueAt > expiresAt) {
-                logGuard("schedule_task rejected (beyond external-origin expiry)", { clientId: ctx.clientId, sources, dueAt });
-                return { success: false, data: null, error: `This conversation has read external content, so tasks created from it must fire within ${limits.ttlMs / 3600000} hours.` };
-            }
             const clamped = repeatMs !== null && repeatMs < limits.minIntervalMs;
             if (clamped) repeatMs = limits.minIntervalMs;
-            const task = addTask(instructions, dueAt, repeatMs, { origin: "external", originSources: sources, expiresAt });
-            logGuard("schedule_task created from external context", { clientId: ctx.clientId, taskId: task.id, sources, repeatMs, clamped, expiresAt });
+            const task = addTask(instructions, dueAt, repeatMs, { origin: "external", originSources: sources });
+            logGuard("schedule_task created from external context", { clientId: ctx.clientId, taskId: task.id, sources, repeatMs, clamped });
             return {
                 success: true,
                 data: {
                     ...serializeTask(task),
-                    note: `Created from a conversation that read external content: it runs with a restricted, offline tool set${clamped ? `, repeats at most every ${limits.minIntervalMs / 60000} minutes` : ""} and expires at ${new Date(expiresAt).toISOString()}.`,
+                    note: `Created from a conversation that read external content: it runs with a restricted, offline tool set${clamped ? ` and repeats at most every ${limits.minIntervalMs / 60000} minutes` : ""}.`,
                 },
             };
         }

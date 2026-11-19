@@ -13,8 +13,10 @@ import type { ToolResult } from "../tools/types";
  * asking for approval:
  *
  * - scheduled tasks and subagents created from tainted context run with a
- *   small read-only, non-network tool set, are capped and expire;
- * - memories are stored as untrusted and never auto-injected into prompts.
+ *   small read-only, non-network tool set and are capped (tasks also have a
+ *   minimum repeat interval);
+ * - memories are stored as untrusted and loaded into prompts only as quoted
+ *   notes, not instructions.
  *
  * Every guarded action is logged with the "Provenance guard" prefix.
  */
@@ -104,11 +106,10 @@ export function noteToolResult(state: ProvenanceState, name: string, result: Too
     return !wasTainted;
 }
 
-export function taintedTaskLimits(): { maxTasks: number; minIntervalMs: number; ttlMs: number } {
+export function taintedTaskLimits(): { maxTasks: number; minIntervalMs: number } {
     return {
         maxTasks: envInt("JARVIS_TAINTED_TASK_MAX", 3),
         minIntervalMs: envInt("JARVIS_TAINTED_TASK_MIN_INTERVAL_MIN", 60, 1) * 60000,
-        ttlMs: envInt("JARVIS_TAINTED_TASK_TTL_HOURS", 24, 1) * 3600000,
     };
 }
 

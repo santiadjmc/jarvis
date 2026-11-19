@@ -1,7 +1,6 @@
 import { v4 as uuid } from "uuid";
 import { join } from "path";
 import { homedir } from "os";
-import Log from "../../Log";
 import { loadJsonStore, saveJsonAtomic } from "../../utils/jsonStore";
 
 export interface ScheduledTask {
@@ -14,14 +13,11 @@ export interface ScheduledTask {
     /** "external" when created from a conversation that had ingested external content (sec M2). */
     origin?: "user" | "external";
     originSources?: string[];
-    /** Tasks with an expiry are removed once it passes. */
-    expiresAt?: number | null;
 }
 
 export interface TaskOriginMeta {
     origin: "user" | "external";
     originSources?: string[];
-    expiresAt?: number | null;
 }
 
 interface TaskFile {
@@ -47,16 +43,8 @@ export function listTasks(): ScheduledTask[] {
     return load().tasks.sort((a, b) => a.dueAt - b.dueAt);
 }
 
-/** Due tasks; expired tasks are removed (and logged) instead of being returned. */
 export function listDueTasks(now: number = Date.now()): ScheduledTask[] {
-    const data = load();
-    const expired = data.tasks.filter(t => t.expiresAt && t.expiresAt <= now);
-    if (expired.length > 0) {
-        data.tasks = data.tasks.filter(t => !expired.includes(t));
-        save(data);
-        for (const t of expired) Log.warn("Provenance guard: scheduled task expired", { taskId: t.id, origin: t.origin, sources: t.originSources });
-    }
-    return data.tasks.filter(t => t.dueAt <= now);
+    return load().tasks.filter(t => t.dueAt <= now);
 }
 
 export function addTask(instructions: string, dueAt: number, recurringEveryMs: number | null = null, meta?: TaskOriginMeta): ScheduledTask {
@@ -72,7 +60,7 @@ export function addTask(instructions: string, dueAt: number, recurringEveryMs: n
         recurringEveryMs,
         createdAt: Date.now(),
         lastRunAt: null,
-        ...(meta ? { origin: meta.origin, originSources: meta.originSources ?? [], expiresAt: meta.expiresAt ?? null } : {}),
+        ...(meta ? { origin: meta.origin, originSources: meta.originSources ?? [] } : {}),
     };
     data.tasks.push(task);
     save(data);
@@ -95,10 +83,6 @@ export function markRan(id: string): void {
     if (task.recurringEveryMs && task.recurringEveryMs > 0) {
         task.lastRunAt = Date.now();
         task.dueAt = Date.now() + task.recurringEveryMs;
-        if (task.expiresAt && task.dueAt > task.expiresAt) {
-            data.tasks = data.tasks.filter(t => t.id !== id);
-            Log.warn("Provenance guard: recurring task reached its expiry", { taskId: id, origin: task.origin });
-        }
     } else {
         data.tasks = data.tasks.filter(t => t.id !== id);
     }
