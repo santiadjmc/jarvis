@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import conversationManager from "../ai/ConversationManager";
 import toolRegistry from "../tools/registry";
+import modelManager from "../ai/ModelManager";
 import { status as googleStatus } from "../agent/Google/googleAuth";
 import ProcessManager, { decideRestart } from "../ProcessManager";
 import aiOrchestrator from "../ai";
@@ -298,5 +299,20 @@ test("Google expiry nudge uses refresh-token lifetime, not the 1h access token (
         if (previous === undefined) delete process.env.JARVIS_DATA_DIR;
         else process.env.JARVIS_DATA_DIR = previous;
         await rm(dir, { recursive: true, force: true });
+    }
+});
+
+test("JARVIS_NUM_CTX caps the compaction context budget (dev M8)", () => {
+    const previous = process.env.JARVIS_NUM_CTX;
+    try {
+        delete process.env.JARVIS_NUM_CTX;
+        const nominal = modelManager.getMaxContext();
+        process.env.JARVIS_NUM_CTX = "8192";
+        assert.equal(modelManager.getMaxContext(), Math.min(nominal, 8192));
+        process.env.JARVIS_NUM_CTX = "garbage";
+        assert.equal(modelManager.getMaxContext(), nominal);
+    } finally {
+        if (previous === undefined) delete process.env.JARVIS_NUM_CTX;
+        else process.env.JARVIS_NUM_CTX = previous;
     }
 });
