@@ -332,3 +332,12 @@ test("trimming at MAX_MESSAGES keeps the summary and drops orphaned tool results
     }
     conversationManager.delete(conversation.id);
 });
+
+test("deleting a conversation clears its compaction bookkeeping (dev L10)", () => {
+    const conversation = conversationManager.create("client", crypto.randomUUID(), "system", "model");
+    conversationManager.setCompacting(conversation.id, true);
+    conversationManager.applyCompaction(conversation.id, "summary", []);
+    conversationManager.delete(conversation.id);
+    assert.equal(conversationManager.isCompacting(conversation.id), false);
+    assert.equal((conversationManager as any).compactedAt.has(conversation.id), false);
+});

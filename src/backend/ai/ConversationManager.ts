@@ -114,6 +114,8 @@ class ConversationManager {
         if (!conv) return false;
 
         this.conversations.delete(conversationId);
+        this.compactedAt.delete(conversationId);
+        this.compacting.delete(conversationId);
         const session = this.sessionIndex.get(conv.sessionId);
         if (session) {
             session.delete(conversationId);

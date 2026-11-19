@@ -847,6 +847,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             Log.error("Subagent task failed", err);
         } finally {
             this.activeSubagents.delete(taskId);
+            conversationManager.delete(conversation.id);
             this.reWarmFastAfterDeep(model);
         }
     }
