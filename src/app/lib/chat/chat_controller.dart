@@ -369,10 +369,14 @@ class ChatController extends Notifier<ChatState> {
   void startVoiceInput() {
     if (!state.online) return;
     if (_activeRequestId != null) return;
+    ref.read(voiceControllerProvider.notifier).start(sendVoiceTranscript);
+  }
+
+  /// Single entry point for a finished voice transcript, used by every voice
+  /// path (mic button, assistant gesture, continuous mode) so they behave alike.
+  Future<bool> sendVoiceTranscript(String text) {
     final cfg = ref.read(settingsControllerProvider);
-    ref.read(voiceControllerProvider.notifier).start((text) {
-      send(text, model: cfg.model, voice: true);
-    });
+    return send(text, model: cfg.model, voice: cfg.voiceReplies, fromVoice: true);
   }
 
   void setContinuousVoice(bool value) {
@@ -396,10 +400,7 @@ class ChatController extends Notifier<ChatState> {
     _voiceOriginatedRequestId = null;
     if (_activeRequestId != null) return;
     if (!state.online) return;
-    final cfg = ref.read(settingsControllerProvider);
-    ref.read(voiceControllerProvider.notifier).start((text) {
-      send(text, model: cfg.model, voice: true);
-    });
+    ref.read(voiceControllerProvider.notifier).start(sendVoiceTranscript);
   }
 
   void _handle(ServerMessage msg) {
@@ -667,7 +668,7 @@ class ChatController extends Notifier<ChatState> {
   }
 
   /// Returns true if the message was sent.
-  Future<bool> send(String text, {String? model, bool voice = false}) async {
+  Future<bool> send(String text, {String? model, bool voice = false, bool fromVoice = false}) async {
     if (text.trim().isEmpty) return false;
     if (_activeRequestId != null) {
       state = state.copyWith(pendingError: "Jarvis is still answering — tap stop first, or wait.");
@@ -686,7 +687,7 @@ class ChatController extends Notifier<ChatState> {
       return false;
     }
     _activeRequestId = requestId;
-    _voiceOriginatedRequestId = voice ? requestId : null;
+    _voiceOriginatedRequestId = (voice || fromVoice) ? requestId : null;
     final userMsg = ChatMessage(id: _uuid.v4(), role: MessageRole.user, content: text, complete: true);
     _messages = [..._messages, userMsg];
     state = state.copyWith(messages: _messages, clearError: true);

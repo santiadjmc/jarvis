@@ -697,10 +697,7 @@ class _ComposerState extends ConsumerState<_Composer> {
           children: [
             const _ContinuousVoiceToggle(),
             const _SpeakingIndicator(),
-            _VoiceButton(onFinalText: (text) {
-              final cfg = ref.read(settingsControllerProvider);
-              ref.read(chatControllerProvider.notifier).send(text, model: cfg.model, voice: cfg.voiceReplies);
-            }),
+            _VoiceButton(onFinalText: (text) => ref.read(chatControllerProvider.notifier).sendVoiceTranscript(text)),
             Expanded(
               child: TextField(
                 controller: _controller,
