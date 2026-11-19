@@ -13,6 +13,7 @@ import networkTools from "../tools/implementations/network";
 import webTools, { stripMarkup } from "../tools/implementations/web";
 import { guardedFetch, isPrivateAddress, resolvePublicAddress } from "../utils/netguard";
 import { checkBrowserRequestUrl } from "../agent/Browser/browserSession";
+import { assertReadablePath, deniedReason } from "../utils/fsguard";
 import toolRegistry from "../tools/registry";
 import Server from "../server";
 import { consumeConnectToken, GOOGLE_CONNECT_HINT, issueConnectToken } from "../agent/Google/googleAuth";
@@ -70,6 +71,45 @@ test("read_file / grep_files refuse secrets and paths outside allowed roots (H1)
         assert.equal(grep.success, true);
         const paths = (grep.data as any).matches.map((m: any) => m.path);
         assert.deepEqual(paths, [join(root, "notes.txt")]);
+    } finally {
+        if (previous === undefined) delete process.env.JARVIS_FS_ROOTS;
+        else process.env.JARVIS_FS_ROOTS = previous;
+        await rm(root, { recursive: true, force: true });
+    }
+});
+
+test("default file roots include /var/log, /etc, /opt and /mnt, minus /etc secrets", async () => {
+    const previous = process.env.JARVIS_FS_ROOTS;
+    delete process.env.JARVIS_FS_ROOTS;
+    try {
+        for (const p of ["/var/log/syslog", "/etc/hosts", "/etc/nginx/nginx.conf", "/opt/app/config.yml", "/mnt/nas/photos/a.jpg"]) {
+            assert.equal(deniedReason(p), null, p);
+        }
+        for (const p of ["/etc/shadow", "/etc/gshadow", "/etc/shadow-", "/etc/sudoers", "/etc/sudoers.d/90-cloud", "/etc/ssh/ssh_host_ed25519_key",
+            "/etc/ssl/private/site.pem", "/etc/letsencrypt/live/x/privkey.pem", "/etc/wireguard/wg0.conf", "/etc/NetworkManager/system-connections/home.nmconnection"]) {
+            assert.notEqual(deniedReason(p), null, p);
+        }
+        assert.notEqual(deniedReason("/srv/data/x"), null, "other system paths still need JARVIS_FS_ROOTS");
+    } finally {
+        if (previous !== undefined) process.env.JARVIS_FS_ROOTS = previous;
+    }
+});
+
+test(".key files are refused only for private-key content or known key names", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const root = await mkdtemp(join(tmpdir(), "jarvis-keyfiles-"));
+    const previous = process.env.JARVIS_FS_ROOTS;
+    process.env.JARVIS_FS_ROOTS = root;
+    try {
+        await writeFile(join(root, "Quarterly Review.key"), Buffer.from("PK\u0003\u0004 keynote archive"));
+        await writeFile(join(root, "notes.key"), "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjE=\n-----END OPENSSH PRIVATE KEY-----\n");
+        await writeFile(join(root, "server.key"), "anything");
+        assert.equal(await assertReadablePath(join(root, "Quarterly Review.key")).then(() => true), true, "Keynote files are readable");
+        await assert.rejects(assertReadablePath(join(root, "notes.key")), /private key/);
+        await assert.rejects(assertReadablePath(join(root, "server.key")), /private key/);
+        assert.notEqual(deniedReason(join(root, "site.pem")), null, ".pem stays refused");
     } finally {
         if (previous === undefined) delete process.env.JARVIS_FS_ROOTS;
         else process.env.JARVIS_FS_ROOTS = previous;
