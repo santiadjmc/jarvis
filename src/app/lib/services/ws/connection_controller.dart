@@ -75,6 +75,9 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   final Map<String, String> _outbox = {};
   static const _outboxLimit = 100;
   bool _helloSent = false;
+
+  /// Config requests made through [requestConfig], by message id.
+  final Map<String, Completer<Object?>> _pendingConfig = {};
   final _uuid = const Uuid();
 
   Stream<ServerMessage> get messages => _messages.stream;
@@ -294,6 +297,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
               state = state.copyWith(latencyMs: DateTime.now().difference(sentAt).inMilliseconds);
             }
           }
+          if (_settleConfigRequest(parsed)) return;
           _messages.add(parsed);
         } on FormatException catch (e) {
           _messages.addError(e);
@@ -435,6 +439,59 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
 
   void sendConfigGet(String key) {
     _send(JsonEncoder().convert(ConfigGetMessage(id: _uuid.v4(), key: key).toJson()));
+  }
+
+  /// Asks the server for config [key] and waits for the answer. Throws a
+  /// [StateError] with the server's message if it refuses, or if there's no
+  /// connection or no reply within [timeout].
+  Future<Object?> requestConfig(String key, {Duration timeout = const Duration(seconds: 10)}) async {
+    final id = _uuid.v4();
+    final completer = Completer<Object?>();
+    _pendingConfig[id] = completer;
+    try {
+      if (!_send(JsonEncoder().convert(ConfigGetMessage(id: id, key: key).toJson()))) {
+        throw StateError('Not connected to the server.');
+      }
+      return await completer.future.timeout(timeout, onTimeout: () => throw StateError('The server did not answer.'));
+    } finally {
+      _pendingConfig.remove(id);
+    }
+  }
+
+  /// Hands replies to [requestConfig] calls back to their caller. Returns true
+  /// if [msg] was consumed (errors are, so they don't show up in the chat).
+  bool _settleConfigRequest(ServerMessage msg) {
+    switch (msg) {
+      case ConfigResponseMessage(:final id, :final value):
+        _pendingConfig.remove(id)?.complete(value);
+        return false;
+      case JarvisError(:final requestId?, :final message):
+        final completer = _pendingConfig.remove(requestId);
+        if (completer == null) return false;
+        completer.completeError(StateError(message));
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /// The server's HTTP(S) base address for [host], matching the scheme the
+  /// socket uses (`wss` -> `https`, `ws` -> `http`) and keeping any sub-path.
+  static Uri httpBaseUri(String host, {required bool allowInsecure}) {
+    final ws = _webSocketUri(host, allowInsecure: allowInsecure);
+    final path = ws.path.substring(0, ws.path.length - '/ws'.length);
+    return ws.replace(scheme: ws.scheme == 'wss' ? 'https' : 'http', path: path);
+  }
+
+  /// Resolves a server-relative [path] such as `/oauth/google/start?token=…`
+  /// against [host].
+  static Uri serverUrl(String host, String path, {required bool allowInsecure}) {
+    final base = httpBaseUri(host, allowInsecure: allowInsecure);
+    final relative = Uri.parse(path);
+    return base.replace(
+      path: '${base.path}${relative.path.startsWith('/') ? '' : '/'}${relative.path}',
+      query: relative.hasQuery ? relative.query : null,
+    );
   }
 
   void sendConfigSet(String key, Object? value) {

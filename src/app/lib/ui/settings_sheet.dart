@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../chat/chat_controller.dart';
 import '../core/app_config.dart';
@@ -28,6 +29,7 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
   bool _assistantSupported = false;
   bool _isDefaultAssistant = false;
   bool _allowInsecure = false;
+  bool _connectingGoogle = false;
 
   @override
   void initState() {
@@ -115,6 +117,29 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
         _assistantSupported = supported;
         _isDefaultAssistant = isDefault;
       });
+    }
+  }
+
+  /// Asks the server for a one-time Google connect link and opens it in the
+  /// browser. The server only starts the OAuth flow for loopback requests or
+  /// with a token it issued, so /oauth/google/start can't be opened directly.
+  Future<void> _connectGoogle() async {
+    if (_connectingGoogle) return;
+    setState(() => _connectingGoogle = true);
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      final value = await ref.read(connectionControllerProvider.notifier).requestConfig('googleConnectUrl');
+      if (value is! String || value.isEmpty) throw StateError('The server did not return a connect link.');
+      final cfg = ref.read(settingsControllerProvider);
+      final url = ConnectionController.serverUrl(cfg.host, value, allowInsecure: cfg.allowInsecureWs);
+      if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
+        throw StateError('Could not open a browser.');
+      }
+    } catch (e) {
+      final message = e is StateError ? e.message : '$e';
+      messenger?.showSnackBar(SnackBar(content: Text('Google connect failed: $message')));
+    } finally {
+      if (mounted) setState(() => _connectingGoogle = false);
     }
   }
 
@@ -263,6 +288,20 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
             activeThumbColor: JarvisColors.danger,
             value: autoApprove,
             onChanged: connection.status == ConnectionStatus.connected ? _setAutoApprove : null,
+          ),
+          const SizedBox(height: 4),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.account_circle_outlined, color: JarvisColors.inkMuted),
+            title: const Text('Google account', style: TextStyle(fontSize: 14, color: JarvisColors.ink)),
+            subtitle: const Text(
+              'Connect Gmail, Calendar and Drive in your browser',
+              style: TextStyle(fontSize: 12, color: JarvisColors.inkMuted),
+            ),
+            trailing: TextButton(
+              onPressed: connection.status == ConnectionStatus.connected && !_connectingGoogle ? _connectGoogle : null,
+              child: Text(_connectingGoogle ? 'Opening…' : 'Connect'),
+            ),
           ),
           if (_assistantSupported) ...[
             const SizedBox(height: 4),
