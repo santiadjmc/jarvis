@@ -6,7 +6,7 @@ import conversationManager from "./ConversationManager";
 import promptBuilder from "./PromptBuilder";
 import modelManager from "./ModelManager";
 import modelRouter, { RouteTier } from "./ModelRouter";
-import streamManager from "../server/ws/StreamManager";
+import streamManager, { isStreamTimeout } from "../server/ws/StreamManager";
 import connectionManager from "../server/ws/ConnectionManager";
 import deviceRegistry from "../server/ws/DeviceRegistry";
 import toolRegistry from "../tools/registry";
@@ -135,8 +135,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
             for (let turn = 0; turn < turns; turn++) {
                 if (abortController.signal.aborted) {
-                    streamManager.complete(streamId);
-                    this.clearSpeech(streamId);
+                    this.endAborted(client, streamId, abortController.signal);
                     return;
                 }
 
@@ -175,6 +174,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
                 for await (const chunk of tokenStream) {
                     if (abortController.signal.aborted) break;
+                    streamManager.touch(streamId);
 
                     if (chunk.thinking) {
                         const thinkingMsg: TokenMessage = {
@@ -208,8 +208,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                 }
 
                 if (abortController.signal.aborted) {
-                    streamManager.complete(streamId);
-                    this.clearSpeech(streamId);
+                    this.endAborted(client, streamId, abortController.signal);
                     return;
                 }
 
@@ -237,9 +236,8 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             this.reWarmFastAfterDeep(model);
             this.sendError(client.id, "MAX_TOOL_TURNS", `Stopped after ${turns} tool turns.`, streamId);
         } catch (err: any) {
-            if (err.name === "AbortError") {
-                streamManager.complete(streamId);
-                this.clearSpeech(streamId);
+            if (err.name === "AbortError" || abortController.signal.aborted) {
+                this.endAborted(client, streamId, abortController.signal);
                 return;
             }
             Log.error("Agent stream error", err);
@@ -268,6 +266,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
     ): Promise<void> {
         for (const call of calls) {
             if (signal.aborted) return;
+            streamManager.touch(requestId);
 
             const name = call.function?.name;
             const params = (call.function?.arguments as Record<string, unknown>) || {};
@@ -554,7 +553,10 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                 responseLength: response.length,
             });
         } catch (err: any) {
-            if (err?.name === "AbortError") return;
+            if (err?.name === "AbortError" || signal.aborted) {
+                if (isStreamTimeout(signal)) this.sendError(client.id, "STREAM_TIMEOUT", "The request timed out with no progress.", requestId);
+                return;
+            }
             Log.error("Generate error", err);
             this.sendError(client.id, "GENERATE_ERROR", err.message, requestId);
         } finally {
@@ -982,7 +984,17 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         connectionManager.send(clientId, JSON.stringify(payload));
     }
 
+    /** Ends an aborted stream; a sweeper timeout (not a user cancel) is reported to the client. */
+    private endAborted(client: AuthenticatedClient, streamId: string, signal: AbortSignal): void {
+        streamManager.complete(streamId);
+        this.clearSpeech(streamId);
+        if (isStreamTimeout(signal)) {
+            this.sendError(client.id, "STREAM_TIMEOUT", "The request timed out with no progress.", streamId);
+        }
+    }
+
     private sendStatus(clientId: string, status: StatusMessage["status"], requestId?: string, detail?: string): void {
+        if (requestId) streamManager.touch(requestId);
         const msg: StatusMessage = {
             type: "status",
             id: uuid(),

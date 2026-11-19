@@ -220,6 +220,7 @@ export interface ActiveStream {
     sessionId: string;
     model: string;
     startedAt: number;
+    lastActivityAt: number;
     abortController: AbortController;
     fullResponse: string;
 }

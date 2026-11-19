@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import conversationManager from "../ai/ConversationManager";
 import toolRegistry from "../tools/registry";
+import streamManager, { isStreamTimeout } from "../server/ws/StreamManager";
 import { closeBrowser, listPageIds, openPage } from "../agent/Browser/browserSession";
 
 test("compaction keeps the summary before the retained tail", () => {
@@ -85,5 +86,29 @@ test("browser_open with a rejected URL does not leak a tracked page (dev M2)", a
     } finally {
         if (previous !== undefined) process.env.JARVIS_FETCH_ALLOW_PRIVATE = previous;
         await closeBrowser();
+    }
+});
+
+test("stale-stream sweep is idle-based and aborts with a timeout reason (dev H1)", () => {
+    const previous = process.env.JARVIS_STREAM_IDLE_TIMEOUT_MS;
+    process.env.JARVIS_STREAM_IDLE_TIMEOUT_MS = "1000";
+    try {
+        const busy = new AbortController();
+        const idle = new AbortController();
+        const busyId = streamManager.create("client", "session", "model", busy);
+        const idleId = streamManager.create("client", "session", "model", idle);
+        // Both started long ago; only one kept making progress.
+        streamManager.get(busyId)!.startedAt = Date.now() - 600_000;
+        streamManager.get(idleId)!.startedAt = Date.now() - 600_000;
+        streamManager.get(idleId)!.lastActivityAt = Date.now() - 5_000;
+        streamManager.touch(busyId);
+
+        assert.equal(streamManager.cleanupStale(), 1);
+        assert.equal(busy.signal.aborted, false);
+        assert.equal(isStreamTimeout(idle.signal), true);
+        streamManager.complete(busyId);
+    } finally {
+        if (previous === undefined) delete process.env.JARVIS_STREAM_IDLE_TIMEOUT_MS;
+        else process.env.JARVIS_STREAM_IDLE_TIMEOUT_MS = previous;
     }
 });
