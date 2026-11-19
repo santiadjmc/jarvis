@@ -44,6 +44,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     await ref
         .read(settingsControllerProvider.notifier)
         .save(deviceName: name.isEmpty ? null : name, allowInsecureWs: _allowInsecure);
+    if (!mounted) return;
     setState(() {
       _validationError = host.isEmpty
           ? 'Enter the server address, e.g. jarvis.example.com:3000'

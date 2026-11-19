@@ -147,7 +147,7 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
           ],
         ),
       );
-      if (confirmed != true) return;
+      if (confirmed != true || !mounted) return;
     }
     ref.read(chatControllerProvider.notifier).setAutoApprove(value);
   }
