@@ -1,14 +1,17 @@
-import { addTask, listTasks, removeTask } from "../../agent/Scheduler/taskStore";
+import { addTask, listTasks, removeTask, type ScheduledTask } from "../../agent/Scheduler/taskStore";
 import { delegateSubagent } from "../../agent/Subagent/subagentRunner";
 import { listAgents, getAgent } from "../../agent/Subagent/agentRegistry";
+import { guardsEnabled, logGuard, taintedSubagentMax, taintedTaskLimits } from "../../utils/provenance";
 import type { ToolContext, ToolResult, ToolSpec } from "../types";
 
-function serializeTask(t: { id: string; instructions: string; dueAt: number; recurringEveryMs: number | null }) {
+function serializeTask(t: ScheduledTask) {
     return {
         id: t.id,
         instructions: t.instructions,
         dueAt: new Date(t.dueAt).toISOString(),
         repeatEveryMinutes: t.recurringEveryMs ? t.recurringEveryMs / 60000 : null,
+        origin: t.origin ?? "user",
+        ...(t.expiresAt ? { expiresAt: new Date(t.expiresAt).toISOString() } : {}),
     };
 }
 
@@ -31,7 +34,7 @@ const scheduleTask: ToolSpec = {
         },
         required: ["instructions"],
     },
-    async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+    async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
         const instructions = typeof params.instructions === "string" ? params.instructions.trim() : "";
         if (!instructions) return { success: false, data: null, error: "instructions is required" };
 
@@ -48,9 +51,38 @@ const scheduleTask: ToolSpec = {
         }
 
         const repeatMinutes = Number(params.repeat_every_minutes);
-        const repeatMs = Number.isFinite(repeatMinutes) && repeatMinutes > 0 ? repeatMinutes * 60000 : null;
+        let repeatMs = Number.isFinite(repeatMinutes) && repeatMinutes > 0 ? repeatMinutes * 60000 : null;
 
-        const task = addTask(instructions, dueAt, repeatMs);
+        if (ctx.provenance?.tainted && guardsEnabled()) {
+            // Created after the conversation read external content: the run gets a
+            // restricted tool set (see runProactiveTask), and the task is capped.
+            const limits = taintedTaskLimits();
+            const sources = ctx.provenance.sources;
+            const now = Date.now();
+            const existing = listTasks().filter(t => t.origin === "external").length;
+            if (existing >= limits.maxTasks) {
+                logGuard("schedule_task rejected (external-origin task cap)", { clientId: ctx.clientId, sources, existing, max: limits.maxTasks });
+                return { success: false, data: null, error: `This conversation has read external content, and ${existing} task(s) created that way already exist (max ${limits.maxTasks}). Ask the user to cancel one or to schedule it in a new conversation.` };
+            }
+            const expiresAt = now + limits.ttlMs;
+            if (dueAt > expiresAt) {
+                logGuard("schedule_task rejected (beyond external-origin expiry)", { clientId: ctx.clientId, sources, dueAt });
+                return { success: false, data: null, error: `This conversation has read external content, so tasks created from it must fire within ${limits.ttlMs / 3600000} hours.` };
+            }
+            const clamped = repeatMs !== null && repeatMs < limits.minIntervalMs;
+            if (clamped) repeatMs = limits.minIntervalMs;
+            const task = addTask(instructions, dueAt, repeatMs, { origin: "external", originSources: sources, expiresAt });
+            logGuard("schedule_task created from external context", { clientId: ctx.clientId, taskId: task.id, sources, repeatMs, clamped, expiresAt });
+            return {
+                success: true,
+                data: {
+                    ...serializeTask(task),
+                    note: `Created from a conversation that read external content: it runs with a restricted, offline tool set${clamped ? `, repeats at most every ${limits.minIntervalMs / 60000} minutes` : ""} and expires at ${new Date(expiresAt).toISOString()}.`,
+                },
+            };
+        }
+
+        const task = addTask(instructions, dueAt, repeatMs, { origin: "user" });
         return { success: true, data: serializeTask(task) };
     },
 };
@@ -115,7 +147,7 @@ const delegateTask: ToolSpec = {
         },
         required: ["instructions"],
     },
-    async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+    async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
         const instructions = typeof params.instructions === "string" ? params.instructions.trim() : "";
         if (!instructions) return { success: false, data: null, error: "instructions is required" };
 
@@ -132,9 +164,33 @@ const delegateTask: ToolSpec = {
             model = agent.model;
         }
 
-        const taskId = delegateSubagent({ instructions, model, agentId, agentName, agentDescription });
-        if (!taskId) return { success: false, data: null, error: "Too many subagents are already running; wait for one to finish first." };
-        return { success: true, data: { taskId, agent: agentId ?? null, model: model ?? null, spawned: true, note: "Running in the background now; the result will be delivered to the user when it's done." } };
+        const external = !!ctx.provenance?.tainted && guardsEnabled();
+        const originSources = external ? ctx.provenance!.sources : [];
+        const taskId = delegateSubagent({ instructions, model, agentId, agentName, agentDescription, origin: external ? "external" : "user", originSources });
+        if (!taskId) {
+            if (external) logGuard("delegate_task rejected (subagent cap)", { clientId: ctx.clientId, sources: originSources });
+            return {
+                success: false,
+                data: null,
+                error: external
+                    ? `Too many subagents are running; subagents started after reading external content are limited to ${taintedSubagentMax()} at a time. Wait for one to finish first.`
+                    : "Too many subagents are already running; wait for one to finish first.",
+            };
+        }
+        if (external) logGuard("delegate_task spawned from external context", { clientId: ctx.clientId, taskId, sources: originSources });
+        return {
+            success: true,
+            data: {
+                taskId,
+                agent: agentId ?? null,
+                model: model ?? null,
+                spawned: true,
+                origin: external ? "external" : "user",
+                note: external
+                    ? "Running in the background with a restricted, offline tool set because this conversation read external content; the result will be delivered to the user when it's done."
+                    : "Running in the background now; the result will be delivered to the user when it's done.",
+            },
+        };
     },
 };
 

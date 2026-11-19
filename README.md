@@ -161,6 +161,7 @@ All configuration lives in environment variables. See [`.env.example`](.env.exam
 | `JARVIS_AUTO_APPROVE` | `1` to skip approval prompts for risky tools. |
 | `JARVIS_DATA_DIR` | Where memory, tasks, and calendar JSON live. Defaults to `~/.local/share/jarvis`. |
 | `JARVIS_FS_ROOTS` | Comma-separated roots the read-only file tools may access. Defaults to `$HOME`, the working directory and the temp dir; secrets (`.env`, `~/.ssh`, keys, the data dir, `/proc`) are always refused. |
+| `JARVIS_PROVENANCE_GUARDS`, `JARVIS_TAINTED_*` | Guardrails for conversations that have read external content (mail, web, Drive, browser): scheduled tasks and subagents created from them run with an offline tool set and are capped and expire; memories from them are stored as untrusted. See `.env.example`. |
 | `JARVIS_FETCH_ALLOW_PRIVATE` | `1` lets `fetch_url` reach private/loopback addresses. Off by default. |
 | `TTS_*` | Piper binary, voice, model directory, and speed. |
 | `GOOGLE_*` | OAuth client for Google tools. |

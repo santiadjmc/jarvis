@@ -1,4 +1,5 @@
 import { addMemory, searchMemory, memoryCount, listMemories, deleteMemory } from "../../agent/Memory/memoryStore";
+import { guardsEnabled, logGuard } from "../../utils/provenance";
 import type { ToolContext, ToolResult, ToolSpec } from "../types";
 
 const remember: ToolSpec = {
@@ -14,10 +15,21 @@ const remember: ToolSpec = {
         },
         required: ["fact"],
     },
-    async execute(params: Record<string, unknown>, _ctx: ToolContext): Promise<ToolResult> {
+    async execute(params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
         const fact = typeof params.fact === "string" ? params.fact.trim() : "";
         if (!fact) return { success: false, data: null, error: "fact is required" };
         try {
+            if (ctx.provenance?.tainted && guardsEnabled()) {
+                // May have been planted by injected content: kept as data, never
+                // re-injected into prompts as an instruction.
+                const sources = ctx.provenance.sources;
+                const id = await addMemory(fact, "fact", { untrusted: true, source: sources.join(",") });
+                logGuard("remember stored as untrusted", { clientId: ctx.clientId, memoryId: id, sources });
+                return {
+                    success: true,
+                    data: { id, stored: fact, untrusted: true, total: memoryCount(), note: "Stored as untrusted because this conversation read external content; it is not loaded into future prompts automatically." },
+                };
+            }
             const id = await addMemory(fact);
             return { success: true, data: { id, stored: fact, total: memoryCount() } };
         } catch (err: any) {

@@ -1,3 +1,4 @@
+import type { ProvenanceState } from "../utils/provenance";
 export interface OllamaGenerateOptions {
     model: string;
     prompt: string;
@@ -129,6 +130,8 @@ export interface Conversation {
     model: string;
     createdAt: number;
     updatedAt: number;
+    /** Taint state for prompt-injection guardrails; see utils/provenance. */
+    provenance?: ProvenanceState;
 }
 
 export interface EmbeddingEntry {

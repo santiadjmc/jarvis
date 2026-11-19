@@ -21,6 +21,10 @@ import authService from "../auth/AuthService";
 import { registerSubagentRunner, type SubagentRequest } from "../agent/Subagent/subagentRunner";
 import Log from "../Log";
 import { ConversationQueue } from "./ConversationQueue";
+import {
+    createProvenance, guardsEnabled, logGuard, noteToolResult, snapshotProvenance,
+    taintedRunTools, taintedSubagentMax, type ProvenanceState,
+} from "../utils/provenance";
 
 function maxSubagents(): number {
     const parsed = parseInt(process.env.JARVIS_MAX_SUBAGENTS || "3", 10);
@@ -58,6 +62,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
     private speechSeq = new Map<string, number>();
     private speechTail = new Map<string, Promise<void>>();
     private activeSubagents = new Set<string>();
+    private activeExternalSubagents = new Set<string>();
     private chatQueue = new ConversationQueue();
 
     async handleChat(client: AuthenticatedClient, message: any): Promise<void> {
@@ -407,7 +412,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                     return;
                 }
                 if (decision === "approve") {
-                    result = await toolRegistry.execute(name, params, { clientId: client.id, requestId });
+                    result = await toolRegistry.execute(name, params, this.toolContext(client.id, requestId, conversationId));
                 } else {
                     result = {
                         success: false,
@@ -417,7 +422,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                     };
                 }
             } else {
-                result = await toolRegistry.execute(name, params, { clientId: client.id, requestId });
+                result = await toolRegistry.execute(name, params, this.toolContext(client.id, requestId, conversationId));
             }
 
             if (signal.aborted) {
@@ -431,7 +436,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
             conversationManager.addMessage(conversationId, {
                 role: "tool",
-                content: toolRegistry.serializeForModel(name, result),
+                content: this.toolResultForModel(conversationId, name, result),
                 timestamp: Date.now(),
                 tool_name: name,
                 tool_call_id: callId,
@@ -461,7 +466,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             connectionManager.send(client.id, JSON.stringify(payload));
             conversationManager.addMessage(conversationId, {
                 role: "tool",
-                content: toolRegistry.serializeForModel(name, result),
+                content: this.toolResultForModel(conversationId, name, result),
                 timestamp: Date.now(),
                 tool_name: name,
                 tool_call_id: callId,
@@ -533,7 +538,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
         conversationManager.addMessage(conversationId, {
             role: "tool",
-            content: toolRegistry.serializeForModel(name, result),
+            content: this.toolResultForModel(conversationId, name, result),
             timestamp: Date.now(),
             tool_name: name,
             tool_call_id: callId,
@@ -706,7 +711,8 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             const topK = Number.isFinite(parsedTopK) && parsedTopK > 0 ? parsedTopK : 3;
             const parsedMinScore = parseFloat(process.env.JARVIS_MEMORY_MIN_SCORE || "");
             const minScore = Number.isFinite(parsedMinScore) ? parsedMinScore : 0.4;
-            const results = await searchMemory(query, topK, minScore);
+            // Untrusted memories (stored from tainted conversations) are never auto-injected.
+            const results = await searchMemory(query, topK, minScore, { trustedOnly: true });
             if (!results.length) return "";
             const facts = results.map(r => `- ${r.content}`).join("\n");
             Log.info("Memory recall injected", { query, matches: results.length });
@@ -743,15 +749,16 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         const model = modelManager.getActive();
         // A fresh conversation per run, so unrelated scheduled tasks don't bleed into each other.
         const conversation = conversationManager.create("proactive-scheduler", `proactive-${streamId}`, this.PROACTIVE_SYSTEM_PROMPT, model);
+        const allowed = this.startAutonomousRun(conversation, task.origin === "external", task.originSources, { taskId: task.id });
 
         conversationManager.addMessage(conversation.id, {
             role: "user",
-            content: `[Scheduled trigger fired] ${task.instructions}`,
+            content: `[Scheduled trigger fired${allowed ? " | origin: external content" : ""}] ${task.instructions}`,
             timestamp: Date.now(),
             model,
         });
 
-        const toolDefs = toolRegistry.defsForOllama({ safeOnly: true });
+        const toolDefs = this.autonomousToolDefs(allowed);
         const turns = maxToolTurns();
         let assistantContent = "";
 
@@ -796,7 +803,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                         model,
                         toolCalls,
                     });
-                    await this.executeSafeToolCalls(conversation.id, toolCalls);
+                    await this.executeSafeToolCalls(conversation.id, toolCalls, allowed);
                     continue;
                 }
 
@@ -830,8 +837,11 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
 
     spawnSubagent(req: SubagentRequest): string | null {
         if (this.activeSubagents.size >= maxSubagents()) return null;
+        const external = req.origin === "external";
+        if (external && this.activeExternalSubagents.size >= taintedSubagentMax()) return null;
         const taskId = uuid();
         this.activeSubagents.add(taskId);
+        if (external) this.activeExternalSubagents.add(taskId);
         this.runSubagentTask(taskId, req).catch(err => {
             Log.error("Subagent task crashed", err);
         });
@@ -844,14 +854,16 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         const systemPrompt = this.subagentSystemPrompt(req.agentName, req.agentDescription);
         const conversation = conversationManager.getOrCreate(`subagent-${taskId}`, "subagent", systemPrompt, model);
 
+        const allowed = this.startAutonomousRun(conversation, req.origin === "external", req.originSources, { subagentTaskId: taskId });
+
         conversationManager.addMessage(conversation.id, {
             role: "user",
-            content: `[Delegated task] ${req.instructions}`,
+            content: `[Delegated task${allowed ? " | origin: external content" : ""}] ${req.instructions}`,
             timestamp: Date.now(),
             model,
         });
 
-        const toolDefs = toolRegistry.defsForOllama({ safeOnly: true });
+        const toolDefs = this.autonomousToolDefs(allowed);
         const turns = maxToolTurns();
         let assistantContent = "";
 
@@ -897,7 +909,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                         model,
                         toolCalls,
                     });
-                    await this.executeSafeToolCalls(conversation.id, toolCalls);
+                    await this.executeSafeToolCalls(conversation.id, toolCalls, allowed);
                     continue;
                 }
 
@@ -925,12 +937,17 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
             Log.error("Subagent task failed", err);
         } finally {
             this.activeSubagents.delete(taskId);
+            this.activeExternalSubagents.delete(taskId);
             conversationManager.delete(conversation.id);
             this.reWarmFastAfterDeep(model);
         }
     }
 
-    private async executeSafeToolCalls(conversationId: string, calls: OllamaToolCall[]): Promise<void> {
+    /**
+     * `allowed` is the restricted tool set for runs created from tainted context;
+     * undefined means every approval-free server tool.
+     */
+    private async executeSafeToolCalls(conversationId: string, calls: OllamaToolCall[], allowed?: Set<string>): Promise<void> {
         for (const call of calls) {
             const name = call.function?.name;
             const params = (call.function?.arguments as Record<string, unknown>) || {};
@@ -954,18 +971,68 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                     error: `${name} requires live user approval and cannot run in an autonomous/proactive task.`,
                     executionTimeMs: 0,
                 };
+            } else if (allowed && !allowed.has(name)) {
+                logGuard("tool blocked in external-origin run", { conversationId, tool: name });
+                result = {
+                    success: false,
+                    data: null,
+                    error: `${name} is not available in a task that was created from external content (mail, web, documents). Only offline, read-only tools are allowed here.`,
+                    executionTimeMs: 0,
+                };
             } else {
-                result = await toolRegistry.execute(name, params, { clientId: "proactive-scheduler", requestId: conversationId });
+                result = await toolRegistry.execute(name, params, this.toolContext("proactive-scheduler", conversationId, conversationId));
             }
 
             conversationManager.addMessage(conversationId, {
                 role: "tool",
-                content: toolRegistry.serializeForModel(name, result),
+                content: this.toolResultForModel(conversationId, name, result),
                 timestamp: Date.now(),
                 tool_name: name,
                 tool_call_id: callId,
             });
         }
+    }
+
+    private provenanceFor(conversationId: string): ProvenanceState | undefined {
+        const conversation = conversationManager.get(conversationId);
+        if (!conversation) return undefined;
+        if (!conversation.provenance) conversation.provenance = createProvenance();
+        return conversation.provenance;
+    }
+
+    private toolContext(clientId: string, requestId: string, conversationId: string) {
+        return { clientId, requestId, provenance: snapshotProvenance(this.provenanceFor(conversationId)) };
+    }
+
+    /** Serializes a tool result for the model and updates the conversation's taint state. */
+    private toolResultForModel(conversationId: string, name: string, result: ToolResult): string {
+        const state = this.provenanceFor(conversationId);
+        if (state) noteToolResult(state, name, result, conversationId);
+        return toolRegistry.serializeForModel(name, result);
+    }
+
+    /**
+     * Marks an autonomous run created from tainted context: its conversation
+     * starts tainted and it gets the restricted tool set, which is returned.
+     * Returns undefined for user-origin runs.
+     */
+    private startAutonomousRun(
+        conversation: { id: string; provenance?: ProvenanceState },
+        external: boolean,
+        sources: string[] | undefined,
+        meta: Record<string, unknown>,
+    ): Set<string> | undefined {
+        if (!external) return undefined;
+        conversation.provenance = createProvenance(sources && sources.length > 0 ? sources : ["external"]);
+        if (!guardsEnabled()) return undefined;
+        const allowed = taintedRunTools();
+        logGuard("autonomous run restricted (external origin)", { ...meta, sources, tools: Array.from(allowed) });
+        return allowed;
+    }
+
+    private autonomousToolDefs(allowed: Set<string> | undefined) {
+        const defs = toolRegistry.defsForOllama({ safeOnly: true });
+        return allowed ? defs.filter(d => allowed.has(d.function.name)) : defs;
     }
 
     private reWarmFastAfterDeep(model: string): void {

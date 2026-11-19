@@ -22,7 +22,7 @@ import driveTools from "./implementations/drive";
 import youtubeTools from "./implementations/youtube";
 import googleAccountTools from "./implementations/googleAccount";
 import deviceTools from "./deviceTools";
-import type { ToolResult, ToolResultMessagePayload, ToolSpec } from "./types";
+import type { ToolContext, ToolResult, ToolResultMessagePayload, ToolSpec } from "./types";
 
 const MAX_RESULT_CHARS = 8000;
 
@@ -116,7 +116,7 @@ class ToolRegistry {
             }));
     }
 
-    async execute(name: string, params: Record<string, unknown>, ctx: { clientId: string; requestId: string }): Promise<ToolResult> {
+    async execute(name: string, params: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
         const spec = this.get(name);
         if (!spec) return { success: false, data: null, error: `Unknown tool: ${name}`, executionTimeMs: 0 };
         if (!this.enabled(name)) return { success: false, data: null, error: `Tool disabled: ${name}`, executionTimeMs: 0 };

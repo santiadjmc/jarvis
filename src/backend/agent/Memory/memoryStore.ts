@@ -11,6 +11,25 @@ export interface MemoryEntry {
     type: "fact" | "note";
     embedding?: number[];
     createdAt: number;
+    /** Stored from a conversation that had ingested external content (sec M2). */
+    untrusted?: boolean;
+    source?: string;
+}
+
+export interface MemoryOrigin {
+    untrusted: boolean;
+    source?: string;
+}
+
+export interface MemorySearchResult {
+    content: string;
+    score: number;
+    createdAt: number;
+    untrusted?: true;
+}
+
+function toResult(e: MemoryEntry, score: number): MemorySearchResult {
+    return { content: e.content, score, createdAt: e.createdAt, ...(e.untrusted ? { untrusted: true as const } : {}) };
 }
 
 interface MemoryFile {
@@ -61,11 +80,14 @@ function cosine(a: number[], b: number[]): number {
     return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-export async function addMemory(content: string, type: "fact" | "note" = "fact"): Promise<string> {
+export async function addMemory(content: string, type: "fact" | "note" = "fact", origin?: MemoryOrigin): Promise<string> {
     const embedding = (await embed(content)) || undefined;
     return withWriteLock(() => {
         const data = load();
-        const entry: MemoryEntry = { id: uuid(), content, type, embedding, createdAt: Date.now() };
+        const entry: MemoryEntry = {
+            id: uuid(), content, type, embedding, createdAt: Date.now(),
+            ...(origin?.untrusted ? { untrusted: true, source: origin.source } : {}),
+        };
         data.entries.push(entry);
         if (data.entries.length > MAX_ENTRIES) {
             data.entries = data.entries.slice(-MAX_ENTRIES);
@@ -75,8 +97,10 @@ export async function addMemory(content: string, type: "fact" | "note" = "fact")
     });
 }
 
-export async function searchMemory(query: string, k = 5, minScore = 0.35): Promise<Array<{ content: string; score: number; createdAt: number }>> {
+/** `trustedOnly` skips entries stored from tainted conversations (used for prompt auto-injection). */
+export async function searchMemory(query: string, k = 5, minScore = 0.35, opts: { trustedOnly?: boolean } = {}): Promise<MemorySearchResult[]> {
     const data = load();
+    if (opts.trustedOnly) data.entries = data.entries.filter(e => !e.untrusted);
     if (data.entries.length === 0) return [];
 
     const queryVec = await embed(query);
@@ -85,13 +109,13 @@ export async function searchMemory(query: string, k = 5, minScore = 0.35): Promi
         return data.entries
             .filter(e => e.content.toLowerCase().includes(q))
             .slice(0, k)
-            .map(e => ({ content: e.content, score: 1, createdAt: e.createdAt }));
+            .map(e => toResult(e, 1));
     }
 
     return data.entries
         // Entries embedded with a different model (other dimension) can't be compared.
         .filter(e => e.embedding && e.embedding.length === queryVec.length)
-        .map(e => ({ content: e.content, score: cosine(queryVec, e.embedding!), createdAt: e.createdAt }))
+        .map(e => toResult(e, cosine(queryVec, e.embedding!)))
         .filter(r => r.score >= minScore)
         .sort((a, b) => b.score - a.score)
         .slice(0, k);
@@ -101,13 +125,13 @@ export function memoryCount(): number {
     return load().entries.length;
 }
 
-export function listMemories(limit = 50): Array<{ id: string; content: string; type: string; createdAt: number }> {
+export function listMemories(limit = 50): Array<{ id: string; content: string; type: string; createdAt: number; untrusted?: true }> {
     const data = load();
     return data.entries
         .slice()
         .sort((a, b) => b.createdAt - a.createdAt)
         .slice(0, limit)
-        .map(e => ({ id: e.id, content: e.content, type: e.type, createdAt: e.createdAt }));
+        .map(e => ({ id: e.id, content: e.content, type: e.type, createdAt: e.createdAt, ...(e.untrusted ? { untrusted: true as const } : {}) }));
 }
 
 export function deleteMemory(id: string): Promise<boolean> {
