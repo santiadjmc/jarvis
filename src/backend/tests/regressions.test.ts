@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import conversationManager from "../ai/ConversationManager";
 import toolRegistry from "../tools/registry";
+import llmClient from "../ai/LLMClient";
 import streamManager, { isStreamTimeout } from "../server/ws/StreamManager";
 import { closeBrowser, listPageIds, openPage } from "../agent/Browser/browserSession";
 
@@ -110,5 +111,52 @@ test("stale-stream sweep is idle-based and aborts with a timeout reason (dev H1)
     } finally {
         if (previous === undefined) delete process.env.JARVIS_STREAM_IDLE_TIMEOUT_MS;
         else process.env.JARVIS_STREAM_IDLE_TIMEOUT_MS = previous;
+    }
+});
+
+test("cancelling a chat stream closes the upstream LLM connection (dev H2)", async () => {
+    const http = await import("node:http");
+    let closed = 0;
+    const server = http.createServer((req, res) => {
+        req.resume();
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        const timer = setInterval(() => {
+            res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: "x" } }] })}\n\n`);
+        }, 20);
+        res.on("close", () => { clearInterval(timer); closed++; });
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as import("node:net").AddressInfo).port;
+    const client = llmClient as any;
+    const previousBase = client.baseUrl;
+    client.baseUrl = `http://127.0.0.1:${port}/v1`;
+    const waitFor = async (n: number) => {
+        for (let i = 0; i < 100 && closed < n; i++) await new Promise(r => setTimeout(r, 20));
+    };
+    try {
+        // Consumer stops early (as runAgent does with `break`).
+        for await (const chunk of llmClient.chatStream({ model: "m", messages: [], stream: true })) {
+            assert.equal(chunk.content, "x");
+            break;
+        }
+        await waitFor(1);
+        assert.equal(closed, 1, "upstream stream should close when the consumer breaks");
+
+        // Caller aborts mid-stream (user cancel / sweeper).
+        const abort = new AbortController();
+        let seen = 0;
+        try {
+            for await (const _ of llmClient.chatStream({ model: "m", messages: [], stream: true, signal: abort.signal })) {
+                if (++seen === 2) abort.abort();
+            }
+        } catch {
+            // An AbortError or a clean end are both acceptable here.
+        }
+        await waitFor(2);
+        assert.equal(closed, 2, "upstream stream should close when the request is aborted");
+    } finally {
+        client.baseUrl = previousBase;
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
     }
 });

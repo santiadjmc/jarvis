@@ -113,54 +113,61 @@ class LLMClient {
         let buffer = "";
         const pendingCalls = new Map<number, PendingToolCall>();
 
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+        // Cancel the body when the consumer stops early (break/return) or the
+        // request is aborted, so the backend stops generating.
+        try {
+            while (true) {
+                if (options.signal?.aborted) break;
+                const { done, value } = await reader.read();
+                if (done) break;
 
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split("\n");
+                buffer = lines.pop() || "";
 
-            for (const rawLine of lines) {
-                const line = rawLine.trim();
-                if (!line || !line.startsWith("data:")) continue;
+                for (const rawLine of lines) {
+                    const line = rawLine.trim();
+                    if (!line || !line.startsWith("data:")) continue;
 
-                const payload = line.slice(5).trim();
-                if (payload === "[DONE]") continue;
+                    const payload = line.slice(5).trim();
+                    if (payload === "[DONE]") continue;
 
-                let chunk: any;
-                try {
-                    chunk = JSON.parse(payload);
-                } catch {
-                    continue;
-                }
+                    let chunk: any;
+                    try {
+                        chunk = JSON.parse(payload);
+                    } catch {
+                        continue;
+                    }
 
-                const choice = chunk.choices?.[0];
-                const delta = choice?.delta || {};
-                const content: string = delta.content || "";
-                const thinking: string = delta.reasoning_content || delta.reasoning || "";
+                    const choice = chunk.choices?.[0];
+                    const delta = choice?.delta || {};
+                    const content: string = delta.content || "";
+                    const thinking: string = delta.reasoning_content || delta.reasoning || "";
 
-                if (Array.isArray(delta.tool_calls)) {
-                    for (const tc of delta.tool_calls) {
-                        const idx = typeof tc.index === "number" ? tc.index : 0;
-                        const existing = pendingCalls.get(idx) || { name: "", args: "" };
-                        if (tc.id) existing.id = tc.id;
-                        if (tc.function?.name) existing.name = tc.function.name;
-                        if (tc.function?.arguments) existing.args += tc.function.arguments;
-                        pendingCalls.set(idx, existing);
+                    if (Array.isArray(delta.tool_calls)) {
+                        for (const tc of delta.tool_calls) {
+                            const idx = typeof tc.index === "number" ? tc.index : 0;
+                            const existing = pendingCalls.get(idx) || { name: "", args: "" };
+                            if (tc.id) existing.id = tc.id;
+                            if (tc.function?.name) existing.name = tc.function.name;
+                            if (tc.function?.arguments) existing.args += tc.function.arguments;
+                            pendingCalls.set(idx, existing);
+                        }
+                    }
+
+                    const finished = choice?.finish_reason != null;
+                    const result: ChatStreamChunk = { content, thinking, done: false };
+                    if (finished && pendingCalls.size > 0) {
+                        result.toolCalls = finalizeToolCalls(pendingCalls);
+                    }
+
+                    if (content || thinking || result.toolCalls) {
+                        yield result;
                     }
                 }
-
-                const finished = choice?.finish_reason != null;
-                const result: ChatStreamChunk = { content, thinking, done: false };
-                if (finished && pendingCalls.size > 0) {
-                    result.toolCalls = finalizeToolCalls(pendingCalls);
-                }
-
-                if (content || thinking || result.toolCalls) {
-                    yield result;
-                }
             }
+        } finally {
+            reader.cancel().catch(() => {});
         }
     }
 
@@ -311,6 +318,7 @@ class LLMClient {
             else signal.addEventListener("abort", onAbort, { once: true });
         }
 
+        let ok = false;
         try {
             const headers: Record<string, string> = { "Content-Type": "application/json" };
             if (authenticated && this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
@@ -323,9 +331,12 @@ class LLMClient {
                 const text = await response.text().catch(() => "");
                 throw new Error(`LLM request failed (${response.status}): ${text.slice(0, 300) || response.statusText}`);
             }
+            ok = true;
             return response;
         } finally {
-            if (signal) signal.removeEventListener("abort", onAbort);
+            // On success the listener stays attached for the life of the body, so
+            // aborting the caller's signal still cancels a streaming response.
+            if (signal && !ok) signal.removeEventListener("abort", onAbort);
         }
     }
 }
