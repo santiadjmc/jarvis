@@ -45,6 +45,7 @@ class VoiceController extends Notifier<VoiceState> {
   bool _nativeInitialized = false;
   void Function(String text)? _onFinal;
   StreamSubscription<Uint8List>? _audioStreamSub;
+  StreamSubscription<Object?>? _partialsSub;
   Timer? _silenceTimer;
   Timer? _maxDurationTimer;
 
@@ -54,6 +55,7 @@ class VoiceController extends Notifier<VoiceState> {
       _silenceTimer?.cancel();
       _maxDurationTimer?.cancel();
       unawaited(_audioStreamSub?.cancel());
+      unawaited(_partialsSub?.cancel());
       unawaited(_recorder?.dispose());
       unawaited(_stt?.stop());
       unawaited(_liveSession?.stop());
@@ -67,9 +69,16 @@ class VoiceController extends Notifier<VoiceState> {
   bool get supported => _isNative || _isWhisper;
 
   Future<void> start(void Function(String text) onFinal) async {
+    // Starting again while a session is live would orphan it (mic left open).
+    if (state.status == VoiceStatus.listening || state.status == VoiceStatus.transcribing) return;
     _onFinal = onFinal;
     if (_isNative) {
-      await _startNative();
+      // Callers don't await start(), so never let an exception escape.
+      try {
+        await _startNative();
+      } catch (e) {
+        state = VoiceState(status: VoiceStatus.idle, error: 'Could not start voice input: $e');
+      }
     } else if (_isWhisper) {
       await _startWhisper();
     } else {
@@ -164,14 +173,26 @@ class VoiceController extends Notifier<VoiceState> {
       return;
     }
 
-    final audioStream = await _recorder!.startStream(
-      const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1),
-    );
-    _liveSession = await startWhisperLiveSession(modelPath: modelPath, lang: 'auto');
+    final Stream<Uint8List> audioStream;
+    try {
+      audioStream = await _recorder!.startStream(
+        const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1),
+      );
+      _liveSession = await startWhisperLiveSession(modelPath: modelPath, lang: 'auto');
+    } catch (e) {
+      // Don't leave the microphone streaming when the session failed to start.
+      try {
+        await _recorder?.stop();
+      } catch (_) {}
+      _liveSession = null;
+      state = VoiceState(status: VoiceStatus.idle, error: 'Could not start voice input: $e');
+      return;
+    }
 
     state = state.copyWith(status: VoiceStatus.listening, transcript: '', soundLevel: 0, clearError: true);
 
-    _liveSession!.partials.listen((text) {
+    await _partialsSub?.cancel();
+    _partialsSub = _liveSession!.partials.listen((text) {
       if (state.status == VoiceStatus.listening) state = state.copyWith(transcript: text, clearError: true);
     });
 
@@ -216,6 +237,8 @@ class VoiceController extends Notifier<VoiceState> {
     _silenceTimer?.cancel();
     _maxDurationTimer?.cancel();
     unawaited(_audioStreamSub?.cancel());
+    unawaited(_partialsSub?.cancel());
+    _partialsSub = null;
     try {
       await _recorder?.stop();
       state = state.copyWith(status: VoiceStatus.transcribing, soundLevel: 0);
