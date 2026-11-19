@@ -1060,7 +1060,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         const state = this.provenanceFor(conversationId);
         const serialized = toolRegistry.serializeForModel(name, result);
         if (!state) return serialized;
-        if (result.success && isLocalDataSource(name)) recordLocalData(state, result.data);
+        if (result.success && guardsEnabled() && isLocalDataSource(name)) recordLocalData(state, result.data);
         noteToolResult(state, name, result, conversationId);
         if (!state.tainted || !guardsEnabled()) return serialized;
         const { text, count } = redactSecrets(serialized);

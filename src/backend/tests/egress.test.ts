@@ -268,3 +268,26 @@ test("end-to-end: a call the user approves isn't overridden by the egress check,
         conversationManager.delete(conv.id);
     }
 });
+
+test("local data isn't fingerprinted when the guardrails are off", () => {
+    const orch = aiOrchestrator as any;
+    const conv = conversationManager.create("egress-off", `egress-${crypto.randomUUID()}`, "sys", "m");
+    const previous = process.env.JARVIS_PROVENANCE_GUARDS;
+    process.env.JARVIS_PROVENANCE_GUARDS = "0";
+    try {
+        orch.toolResultForModel(conv.id, "read_file", { success: true, data: { content: FILE_TEXT.repeat(50) }, executionTimeMs: 0 });
+        const state = conversationManager.get(conv.id)!.provenance!;
+        assert.equal(state.localShingles?.size ?? 0, 0);
+        assert.equal(state.localText ?? "", "");
+        recordLocalData(state, FILE_TEXT);
+        assert.equal(state.localShingles?.size ?? 0, 0);
+    } finally {
+        if (previous === undefined) delete process.env.JARVIS_PROVENANCE_GUARDS;
+        else process.env.JARVIS_PROVENANCE_GUARDS = previous;
+        conversationManager.delete(conv.id);
+    }
+    // With guards on (the default) it is recorded so the egress check can use it.
+    const on = createProvenance();
+    recordLocalData(on, FILE_TEXT);
+    assert.ok(on.localShingles!.size > 0);
+});

@@ -74,6 +74,8 @@ export function isLocalDataSource(name: string): boolean {
 
 /** Fingerprints text returned by a local-data tool so it can be recognised in outbound requests. */
 export function recordLocalData(state: ProvenanceState, data: unknown): void {
+    // Only the outbound guard reads these fingerprints; don't keep them when it's off.
+    if (!guardsEnabled()) return;
     const leaves: string[] = [];
     stringLeaves(data, leaves);
     if (!state.localShingles) state.localShingles = new Set();
