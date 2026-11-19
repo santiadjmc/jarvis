@@ -645,7 +645,7 @@ class DeviceToolExecutor {
       }
       // Grandchildren may still hold the pipes open; don't wait on them forever.
       await Future.wait([stdoutSub.asFuture<void>(), stderrSub.asFuture<void>()])
-          .timeout(const Duration(seconds: 2), onTimeout: () => const []);
+          .timeout(const Duration(seconds: 2), onTimeout: () => const <void>[]);
       await stdoutSub.cancel();
       await stderrSub.cancel();
       final data = {
