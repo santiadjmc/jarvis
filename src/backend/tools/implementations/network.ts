@@ -1,6 +1,7 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
-import { Socket } from "net";
+import { Socket, isIP } from "net";
+import { lookup } from "dns/promises";
 import { resolvePublicAddress } from "../../utils/netguard";
 import type { ToolContext, ToolResult, ToolSpec } from "../types";
 
@@ -9,6 +10,17 @@ const execFileAsync = promisify(execFile);
 function isValidHost(host: string): boolean {
     // A leading '-' would be parsed as an option by ping.
     return /^[a-zA-Z0-9.\-:]+$/.test(host) && !host.startsWith("-") && host.length < 256;
+}
+
+async function resolveAnyAddress(host: string): Promise<string> {
+    const clean = host.replace(/^\[|\]$/g, "");
+    if (isIP(clean)) return clean;
+    try {
+        const { address } = await lookup(clean, { verbatim: true });
+        return address;
+    } catch {
+        throw new Error(`Could not resolve host: ${clean}`);
+    }
 }
 
 const pingHost: ToolSpec = {
@@ -29,9 +41,12 @@ const pingHost: ToolSpec = {
         const host = typeof params.host === "string" ? params.host.trim() : "";
         if (!host || !isValidHost(host)) return { success: false, data: null, error: "A valid host is required" };
         const count = Math.max(1, Math.min(10, Number(params.count ?? 3)));
+        // Ping is a LAN diagnostic ("is my NAS up?"), so private and loopback
+        // targets are allowed. The name is still resolved here and ping gets
+        // the literal address, so it never parses the host as an option.
         let address: string;
         try {
-            address = await resolvePublicAddress(host);
+            address = await resolveAnyAddress(host);
         } catch (err: any) {
             return { success: false, data: null, error: err.message };
         }

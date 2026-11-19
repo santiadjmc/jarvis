@@ -162,7 +162,7 @@ All configuration lives in environment variables. See [`.env.example`](.env.exam
 | `JARVIS_DATA_DIR` | Where memory, tasks, and calendar JSON live. Defaults to `~/.local/share/jarvis`. |
 | `JARVIS_FS_ROOTS` | Comma-separated roots the read-only file tools may access. Defaults to `$HOME`, the working directory and the temp dir; secrets (`.env`, `~/.ssh`, keys, the data dir, `/proc`) are always refused. |
 | `JARVIS_PROVENANCE_GUARDS`, `JARVIS_TAINTED_*` | Guardrails for conversations that have read external content (mail, web, Drive, browser): scheduled tasks and subagents created from them run with an offline tool set and are capped and expire; memories from them are stored as untrusted. Outbound URLs/requests from them can't carry secrets or local file data, are size-capped and GET-only, and secret-looking strings are redacted from tool results. See `.env.example`. |
-| `JARVIS_FETCH_ALLOW_PRIVATE` | `1` lets `fetch_url` reach private/loopback addresses. Off by default. |
+| `JARVIS_FETCH_ALLOW_PRIVATE` | `1` lets `fetch_url`, `http_request` (and its redirects), `check_port` and the headless browser (pages and subresources) reach private/loopback addresses. Off by default. `ping_host` can always reach LAN and loopback hosts. |
 | `TTS_*` | Piper binary, voice, model directory, and speed. |
 | `GOOGLE_*` | OAuth client for Google tools. |
 
@@ -194,7 +194,7 @@ flutter test
 - Jarvis is designed for a trusted local network. Do not expose the server directly to the public internet without a reverse proxy, TLS, and an authentication review.
 - `.env` contains secrets. It is git-ignored; keep it that way and rotate any key that has ever been committed.
 - The server binds to `0.0.0.0` by default so phones on the LAN can connect. Set `HOST=127.0.0.1` if you only use the desktop client.
-- `fetch_url` blocks loopback, private, link-local, and other reserved addresses by default. Set `JARVIS_FETCH_ALLOW_PRIVATE=1` only if you understand the SSRF risk.
+- `fetch_url`, `http_request`, `check_port` and the headless browser block loopback, private, link-local, and other reserved addresses by default (redirects and browser subresources included). Set `JARVIS_FETCH_ALLOW_PRIVATE=1` only if you understand the SSRF risk. `ping_host` is exempt so you can check LAN devices; it still resolves the name first and never passes option-like hosts to `ping`.
 - The Android client requests sensitive permissions (SMS, calls, contacts, location, accessibility) because device tools use them. Review the manifest and disable capabilities you do not need.
 - Risky tools require approval. Keep `JARVIS_AUTO_APPROVE=0` unless you fully trust the model and the prompts it receives.
 

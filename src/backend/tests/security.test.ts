@@ -258,20 +258,28 @@ test("read-only git tools don't execute repo-configured commands (sec M5)", asyn
     }
 });
 
-test("ping_host and check_port refuse private targets and option-like hosts (sec M6)", async () => {
+test("ping_host reaches LAN/loopback hosts but still rejects option-like hosts; check_port stays guarded", async () => {
     const previous = process.env.JARVIS_FETCH_ALLOW_PRIVATE;
     delete process.env.JARVIS_FETCH_ALLOW_PRIVATE;
     const ctx = { clientId: "t", requestId: "t" };
     const ping = networkTools.find(t => t.name === "ping_host")!;
     const port = networkTools.find(t => t.name === "check_port")!;
     try {
-        for (const host of ["127.0.0.1", "10.0.0.1", "192.168.1.1", "localhost", "-f", "::1"]) {
+        for (const host of ["-f", "-c1", "foo;rm -rf /", "a b", ""]) {
             const r = await ping.execute({ host, count: 1 }, ctx);
             assert.equal(r.success, false, `ping ${host}`);
-            assert.equal(r.data, null, `ping ${host} must be refused before running`);
+            assert.equal(r.data, null, `ping ${JSON.stringify(host)} must be refused before running`);
+        }
+        // Private and loopback targets get past validation and are actually pinged
+        // (the result may still fail if this sandbox has no ping binary or ICMP).
+        for (const host of ["127.0.0.1", "localhost"]) {
+            const r = await ping.execute({ host, count: 1 }, ctx);
+            assert.doesNotMatch(String(r.error ?? ""), /Refusing|valid host/, `ping ${host}`);
+            assert.notEqual(r.data, null, `ping ${host} should run`);
         }
         const r = await port.execute({ host: "127.0.0.1", port: 22 }, ctx);
         assert.equal(r.success, false);
+        assert.match(String(r.error), /Refusing/);
         assert.equal(await resolvePublicAddress("8.8.8.8"), "8.8.8.8");
     } finally {
         if (previous !== undefined) process.env.JARVIS_FETCH_ALLOW_PRIVATE = previous;
