@@ -52,7 +52,7 @@ class _SettingsSheetState extends ConsumerState<SettingsSheet> {
             .whereType<String>()
             .toList();
         if (mounted) setState(() => _availableModels = names);
-      });
+      }, onError: (Object _) {});
       connection.sendConfigGet('models');
     }
   }

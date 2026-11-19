@@ -387,7 +387,7 @@ class ChatController extends Notifier<ChatState> {
         _onVoice(voice);
       case ConfigResponseMessage config:
         _onConfigResponse(config);
-      case PongMessage() || ConnectedMessage() || GoogleAccountStatusMessage():
+      case PongMessage() || ConnectedMessage() || GoogleAccountStatusMessage() || UnknownMessage():
         break;
     }
   }

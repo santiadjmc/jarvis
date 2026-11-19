@@ -413,6 +413,14 @@ class ConnectedMessage extends ServerMessage {
   final String? deviceId;
 }
 
+/// A frame with a `type` this client does not know (e.g. from a newer server).
+/// Ignored by the app instead of being reported as an error.
+class UnknownMessage extends ServerMessage {
+  const UnknownMessage({required this.type});
+
+  final String? type;
+}
+
 sealed class ServerMessage {
   const ServerMessage();
 
@@ -447,7 +455,7 @@ sealed class ServerMessage {
       'config_response' => ConfigResponseMessage.fromJson(json),
       'google_account_status' => GoogleAccountStatusMessage.fromJson(json),
       'connected' => ConnectedMessage.fromJson(json),
-      _ => throw FormatException('Unknown server message type: ${json['type']}'),
+      final type => UnknownMessage(type: type is String ? type : null),
     };
   }
 }
