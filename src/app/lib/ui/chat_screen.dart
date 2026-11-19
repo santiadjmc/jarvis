@@ -673,7 +673,9 @@ class _ComposerState extends ConsumerState<_Composer> {
     final text = _controller.text;
     if (text.trim().isEmpty) return;
     final model = ref.read(settingsControllerProvider).model;
-    await ref.read(chatControllerProvider.notifier).send(text, model: model);
+    final sent = await ref.read(chatControllerProvider.notifier).send(text, model: model);
+    // Keep the text if the send was rejected (offline / still answering).
+    if (!sent || !mounted) return;
     _controller.clear();
     setState(() => _hasText = false);
   }

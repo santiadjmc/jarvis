@@ -666,11 +666,12 @@ class ChatController extends Notifier<ChatState> {
     if (updated.complete) _schedulePersist();
   }
 
-  Future<void> send(String text, {String? model, bool voice = false}) async {
-    if (text.trim().isEmpty) return;
+  /// Returns true if the message was sent.
+  Future<bool> send(String text, {String? model, bool voice = false}) async {
+    if (text.trim().isEmpty) return false;
     if (_activeRequestId != null) {
       state = state.copyWith(pendingError: "Jarvis is still answering — tap stop first, or wait.");
-      return;
+      return false;
     }
     final requestId = _uuid.v4();
     final sent = ref.read(connectionControllerProvider.notifier).sendChat(
@@ -682,7 +683,7 @@ class ChatController extends Notifier<ChatState> {
         );
     if (!sent) {
       state = state.copyWith(pendingError: 'Not connected to Jarvis.');
-      return;
+      return false;
     }
     _activeRequestId = requestId;
     _voiceOriginatedRequestId = voice ? requestId : null;
@@ -690,6 +691,7 @@ class ChatController extends Notifier<ChatState> {
     _messages = [..._messages, userMsg];
     state = state.copyWith(messages: _messages, clearError: true);
     _schedulePersist();
+    return true;
   }
 
   void speakMessage(String messageId, String text) {
