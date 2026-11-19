@@ -67,6 +67,13 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   String? _host;
   String? _apiKey;
   DateTime? _lastPingSentAt;
+
+  /// Tool results / approvals that could not be sent (socket down or
+  /// reconnecting), keyed by frame type + callId so each call is sent once.
+  /// Flushed after the next device_hello.
+  final Map<String, String> _outbox = {};
+  static const _outboxLimit = 100;
+  bool _helloSent = false;
   final _uuid = const Uuid();
 
   Stream<ServerMessage> get messages => _messages.stream;
@@ -115,6 +122,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     }
     _manualClose = false;
     _reconnectAttempt = 0;
+    if (_host != host || _apiKey != apiKey) _outbox.clear();
     _host = host;
     _apiKey = apiKey;
     await ref.read(settingsControllerProvider.notifier).save(host: host, apiKey: apiKey);
@@ -135,6 +143,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     _heartbeat?.cancel();
     _heartbeat = null;
     _closeSocket();
+    _helloSent = false;
     final Uri uri;
     try {
       uri = _webSocketUri(host, allowInsecure: ref.read(settingsControllerProvider).allowInsecureWs);
@@ -341,7 +350,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   }
 
   void sendToolResponse(String requestId, String callId, {required String action}) {
-    _send(JsonEncoder().convert(ToolResponseMessage(
+    _sendOrQueue('tool_response:$callId', JsonEncoder().convert(ToolResponseMessage(
       id: _uuid.v4(),
       requestId: requestId,
       callId: callId,
@@ -356,17 +365,21 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
       cfg = ref.read(settingsControllerProvider);
     }
     final meta = await DeviceToolExecutor.instance.buildMeta(cfg);
-    _send(JsonEncoder().convert(DeviceHelloMessage(
+    final sent = _send(JsonEncoder().convert(DeviceHelloMessage(
       id: _uuid.v4(),
       deviceId: meta.deviceId,
       deviceName: meta.deviceName,
       deviceType: meta.deviceType,
       capabilities: meta.capabilities,
     ).toJson()));
+    if (sent) {
+      _helloSent = true;
+      _flushOutbox();
+    }
   }
 
   void sendToolExecuteResult(String requestId, String callId, DeviceToolResult result) {
-    _send(JsonEncoder().convert(ToolExecuteResultMessage(
+    _sendOrQueue('tool_execute_result:$callId', JsonEncoder().convert(ToolExecuteResultMessage(
       id: _uuid.v4(),
       requestId: requestId,
       callId: callId,
@@ -385,16 +398,39 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     _send(JsonEncoder().convert(ConfigSetMessage(id: _uuid.v4(), key: key, value: value).toJson()));
   }
 
-  void _send(String payload) {
+  /// Sends [payload]; returns false if the socket was not usable.
+  bool _send(String payload) {
     final channel = _channel;
-    if (channel == null || state.status != ConnectionStatus.connected) return;
+    if (channel == null || state.status != ConnectionStatus.connected) return false;
     try {
       channel.sink.add(payload);
+      return true;
     } catch (_) {
       if (!_manualClose) {
         _closeSocket(channel);
         _scheduleReconnect('Connection lost while sending');
       }
+      return false;
+    }
+  }
+
+  /// Sends a frame that must not be lost (tool results, approvals). If the
+  /// socket is down it is queued once per [key] and sent after reconnecting.
+  void _sendOrQueue(String key, String payload) {
+    if (_outbox.isEmpty && _helloSent && _send(payload)) return;
+    if (_outbox.containsKey(key)) return;
+    if (_outbox.length >= _outboxLimit) _outbox.remove(_outbox.keys.first);
+    _outbox[key] = payload;
+    _flushOutbox();
+  }
+
+  void _flushOutbox() {
+    if (!_helloSent || state.status != ConnectionStatus.connected) return;
+    for (final key in _outbox.keys.toList()) {
+      final payload = _outbox[key];
+      if (payload == null) continue;
+      if (!_send(payload)) return;
+      _outbox.remove(key);
     }
   }
 
