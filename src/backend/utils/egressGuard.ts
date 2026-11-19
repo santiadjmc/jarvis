@@ -145,12 +145,28 @@ const TOKEN_PATTERNS: RegExp[] = [
 const SENSITIVE_NAME = "[A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|pass(?:w(?:or)?d|wd)?(?![a-z])|pwd|private[_-]?key|access[_-]?key|credentials?|authorization)[A-Za-z0-9_.-]*";
 // KEY=VALUE (.env), "key": "value" (JSON, possibly JSON-escaped), key: value (YAML).
 const ASSIGNMENT = new RegExp(`(["']?)(${SENSITIVE_NAME})\\1(\\s*[:=]\\s*)(\\\\?["']?)([^\\s"'\\\\,;&<>]{6,})`, "gi");
-const SENSITIVE_ENV_NAME = /(KEY|TOKEN|SECRET|PASS|PWD|CREDENTIAL)/i;
+/**
+ * Env var names are matched on whole `_`-separated words, so JARVIS_MASTER_KEY
+ * or SMTP_PASS count but PWD, KEYBOARD_LAYOUT or PASSTHROUGH don't.
+ */
+const SECRET_ENV_WORDS = new Set([
+    "KEY", "KEYS", "APIKEY", "TOKEN", "TOKENS", "SECRET", "SECRETS",
+    "PASS", "PASSWORD", "PASSWD", "PASSPHRASE", "CREDENTIAL", "CREDENTIALS", "AUTH",
+]);
+const NON_SECRET_ENV_NAMES = new Set([
+    "PWD", "OLDPWD", "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TERM", "LANG", "SSH_AUTH_SOCK",
+]);
+
+export function isSecretEnvName(name: string): boolean {
+    const upper = name.toUpperCase();
+    if (NON_SECRET_ENV_NAMES.has(upper) || upper.startsWith("LC_")) return false;
+    return upper.split(/[^A-Z0-9]+/).some(word => SECRET_ENV_WORDS.has(word));
+}
 
 function secretEnvValues(): string[] {
     const values: string[] = [];
     for (const [name, value] of Object.entries(process.env)) {
-        if (value && value.length >= 8 && SENSITIVE_ENV_NAME.test(name)) values.push(value);
+        if (value && value.length >= 8 && isSecretEnvName(name)) values.push(value);
     }
     return values.sort((a, b) => b.length - a.length);
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { checkOutbound, decodedVariants, recordLocalData, redactSecrets } from "../utils/egressGuard";
+import { checkOutbound, decodedVariants, isSecretEnvName, recordLocalData, redactSecrets } from "../utils/egressGuard";
 import { createProvenance } from "../utils/provenance";
 import aiOrchestrator from "../ai";
 import conversationManager from "../ai/ConversationManager";
@@ -49,6 +49,29 @@ test("secret-looking strings are redacted (sec H1)", () => {
 
     const benign = "maxTokens: 4096, \"tokens\": 120, the weather is sunny";
     assert.equal(redactSecrets(benign).count, 0);
+});
+
+test("PWD and other ordinary env vars are not treated as secrets", () => {
+    const saved = { PWD: process.env.PWD, OLDPWD: process.env.OLDPWD, KEYBOARD_LAYOUT: process.env.KEYBOARD_LAYOUT };
+    process.env.PWD = "/home/santi/jarvis";
+    process.env.OLDPWD = "/home/santi/other";
+    process.env.KEYBOARD_LAYOUT = "us-international";
+    try {
+        const text = '{"path":"/home/santi/jarvis/src/index.ts","prev":"/home/santi/other","kb":"us-international"}';
+        assert.equal(redactSecrets(text).text, text);
+        assert.equal(checkOutbound("fetch_url", { url: "https://example.com/?p=/home/santi/jarvis" }, createProvenance(["web_search"])), null);
+    } finally {
+        for (const [k, v] of Object.entries(saved)) {
+            if (v === undefined) delete process.env[k];
+            else process.env[k] = v;
+        }
+    }
+    for (const name of ["PWD", "OLDPWD", "PATH", "HOME", "USER", "SHELL", "TERM", "LANG", "KEYBOARD_LAYOUT", "PASSTHROUGH_MODE", "SSH_AUTH_SOCK"]) {
+        assert.equal(isSecretEnvName(name), false, name);
+    }
+    for (const name of ["JARVIS_MASTER_KEY", "GOOGLE_CLIENT_SECRET", "SMTP_PASS", "DB_PASSWORD", "GH_TOKEN", "OPENAI_API_KEY", "BASIC_AUTH", "AWS_CREDENTIALS"]) {
+        assert.equal(isSecretEnvName(name), true, name);
+    }
 });
 
 test("outbound URLs in a tainted conversation can't carry local data or secrets (sec H1)", () => {
