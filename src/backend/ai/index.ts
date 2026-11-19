@@ -627,8 +627,10 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
     private async recallMemories(query: string): Promise<string> {
         try {
             if (process.env.JARVIS_MEMORY_AUTOLOAD === "0") return "";
-            const topK = parseInt(process.env.JARVIS_MEMORY_TOP_K || "3", 10);
-            const minScore = parseFloat(process.env.JARVIS_MEMORY_MIN_SCORE || "0.4");
+            const parsedTopK = parseInt(process.env.JARVIS_MEMORY_TOP_K || "", 10);
+            const topK = Number.isFinite(parsedTopK) && parsedTopK > 0 ? parsedTopK : 3;
+            const parsedMinScore = parseFloat(process.env.JARVIS_MEMORY_MIN_SCORE || "");
+            const minScore = Number.isFinite(parsedMinScore) ? parsedMinScore : 0.4;
             const results = await searchMemory(query, topK, minScore);
             if (!results.length) return "";
             const facts = results.map(r => `- ${r.content}`).join("\n");

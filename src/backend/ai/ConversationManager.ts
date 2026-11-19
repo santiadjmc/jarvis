@@ -10,6 +10,12 @@ interface CompactPlan {
     snapshotLast?: ConversationMessage;
 }
 
+/** Reads a positive numeric env var, falling back when unset or invalid (NaN would disable comparisons). */
+function envNumber(name: string, fallback: number, parse: (value: string) => number): number {
+    const parsed = parse(process.env[name] || "");
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 class ConversationManager {
     private conversations = new Map<string, Conversation>();
     private sessionIndex = new Map<string, Set<string>>();
@@ -195,11 +201,11 @@ class ConversationManager {
         const nonSystem = conv.messages.length - 1;
         if (nonSystem <= this.COMPACT_TAIL + 4) return false;
 
-        const threshold = parseFloat(process.env.JARVIS_COMPACT_THRESHOLD || "0.55");
+        const threshold = envNumber("JARVIS_COMPACT_THRESHOLD", 0.55, parseFloat);
         const safe = maxContext * threshold;
         if (estimatedTokens < safe) return false;
 
-        const batch = parseInt(process.env.JARVIS_COMPACT_BATCH || "10", 10);
+        const batch = envNumber("JARVIS_COMPACT_BATCH", 10, v => parseInt(v, 10));
         const lastAt = this.compactedAt.get(conversationId);
         const urgent = estimatedTokens > maxContext * 0.85;
         if (lastAt !== undefined && conv.messages.length < lastAt + batch && !urgent) return false;

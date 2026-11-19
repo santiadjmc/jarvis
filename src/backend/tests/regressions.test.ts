@@ -346,3 +346,23 @@ test("deleting a conversation clears its compaction bookkeeping (dev L10)", () =
 test("markdown links are spoken as their text (dev L1)", () => {
     assert.equal(cleanForSpeech("see [the docs](http://x.example/a) now"), "see the docs now");
 });
+
+test("invalid compaction env values fall back to defaults (dev L7)", () => {
+    const prev = { t: process.env.JARVIS_COMPACT_THRESHOLD, b: process.env.JARVIS_COMPACT_BATCH };
+    process.env.JARVIS_COMPACT_THRESHOLD = "abc";
+    process.env.JARVIS_COMPACT_BATCH = "xyz";
+    const conversation = conversationManager.create("client", crypto.randomUUID(), "system", "model");
+    try {
+        for (let i = 0; i < 20; i++) {
+            conversationManager.addMessage(conversation.id, { role: "user", content: `m${i}`, timestamp: Date.now() });
+        }
+        // Tiny token estimate vs a large window: must not compact.
+        assert.equal(conversationManager.shouldCompact(conversation.id, 10, 100_000), false);
+    } finally {
+        conversationManager.delete(conversation.id);
+        for (const [k, v] of [["JARVIS_COMPACT_THRESHOLD", prev.t], ["JARVIS_COMPACT_BATCH", prev.b]] as const) {
+            if (v === undefined) delete process.env[k];
+            else process.env[k] = v;
+        }
+    }
+});
