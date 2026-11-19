@@ -1,4 +1,7 @@
-import 'dart:io' show Platform, Process;
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io' show Platform, Process, ProcessSignal;
+import 'dart:typed_data' show BytesBuilder;
 
 import 'package:battery_plus/battery_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -608,18 +611,77 @@ class DeviceToolExecutor {
     final command = (params['command'] as String?) ?? '';
     if (command.trim().isEmpty) return DeviceToolResult.failure('command is required');
     const timeout = Duration(seconds: 30);
+    const maxOutputBytes = 64 * 1024;
     try {
       final shell = Platform.isAndroid ? '/system/bin/sh' : 'sh';
-      final process = await Process.run(shell, ['-c', command]).timeout(timeout);
-      return DeviceToolResult(success: true, data: {
-        'exitCode': process.exitCode,
-        'stdout': (process.stdout as String).trim(),
-        'stderr': (process.stderr as String).trim(),
-      });
+      final process = await Process.start(shell, ['-c', command]);
+      final stdoutBuf = _CappedOutput(maxOutputBytes);
+      final stderrBuf = _CappedOutput(maxOutputBytes);
+      final stdoutSub = process.stdout.listen(stdoutBuf.add);
+      final stderrSub = process.stderr.listen(stderrBuf.add);
+      var timedOut = false;
+      int exitCode;
+      try {
+        exitCode = await process.exitCode.timeout(timeout);
+      } on TimeoutException {
+        // Previously the timeout only stopped waiting and left the process running.
+        timedOut = true;
+        await _killProcessTree(process.pid);
+        process.kill(ProcessSignal.sigkill);
+        exitCode = await process.exitCode.timeout(const Duration(seconds: 2), onTimeout: () => -1);
+      }
+      // Grandchildren may still hold the pipes open; don't wait on them forever.
+      await Future.wait([stdoutSub.asFuture<void>(), stderrSub.asFuture<void>()])
+          .timeout(const Duration(seconds: 2), onTimeout: () => const []);
+      await stdoutSub.cancel();
+      await stderrSub.cancel();
+      final data = {
+        'exitCode': exitCode,
+        'stdout': stdoutBuf.text.trim(),
+        'stderr': stderrBuf.text.trim(),
+        if (stdoutBuf.truncated || stderrBuf.truncated) 'truncated': true,
+        if (timedOut) 'timedOut': true,
+      };
+      if (timedOut) {
+        return DeviceToolResult(success: false, data: data, error: 'Command timed out after ${timeout.inSeconds}s and was killed');
+      }
+      return DeviceToolResult(success: true, data: data);
     } catch (e) {
       return DeviceToolResult.failure('$e');
     }
   }
+
+  /// Best effort: kill direct children of the shell first so `sh -c 'a | b'`
+  /// pipelines do not outlive the timeout.
+  static Future<void> _killProcessTree(int pid) async {
+    try {
+      await Process.run('pkill', ['-KILL', '-P', '$pid']).timeout(const Duration(seconds: 2));
+    } catch (_) {}
+  }
+}
+
+class _CappedOutput {
+  _CappedOutput(this.limit);
+
+  final int limit;
+  final BytesBuilder _bytes = BytesBuilder(copy: false);
+  bool truncated = false;
+
+  void add(List<int> chunk) {
+    final room = limit - _bytes.length;
+    if (room <= 0) {
+      truncated = true;
+      return;
+    }
+    if (chunk.length > room) {
+      _bytes.add(chunk.sublist(0, room));
+      truncated = true;
+    } else {
+      _bytes.add(chunk);
+    }
+  }
+
+  String get text => utf8.decode(_bytes.toBytes(), allowMalformed: true);
 }
 
 final deviceToolExecutorProvider = Provider<DeviceToolExecutor>((ref) => DeviceToolExecutor.instance);
