@@ -20,6 +20,7 @@ import { isAutoApproveEnabled } from "../agent/runtimeConfig";
 import authService from "../auth/AuthService";
 import { registerSubagentRunner, type SubagentRequest } from "../agent/Subagent/subagentRunner";
 import Log from "../Log";
+import { ConversationQueue } from "./ConversationQueue";
 
 function maxSubagents(): number {
     const parsed = parseInt(process.env.JARVIS_MAX_SUBAGENTS || "3", 10);
@@ -57,8 +58,64 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
     private speechSeq = new Map<string, number>();
     private speechTail = new Map<string, Promise<void>>();
     private activeSubagents = new Set<string>();
+    private chatQueue = new ConversationQueue();
 
     async handleChat(client: AuthenticatedClient, message: any): Promise<void> {
+        const requestId = message.id as string;
+        // Conversation ownership is bound to the authenticating key, so a client
+        // claiming another key's deviceId can never reach that device's history.
+        const deviceId = client.metadata?.deviceId as string | undefined;
+        const identity = deviceId ? `${client.apiKeyId}:${deviceId}` : client.id;
+        const sessionKey = (message.sessionId as string | undefined) || `session-${identity}`;
+
+        if (this.chatQueue.has(requestId) || streamManager.get(requestId)) {
+            this.sendError(client.id, "DUPLICATE_REQUEST", `Request ${requestId} is already in progress.`, requestId);
+            return;
+        }
+
+        // One turn at a time per conversation, in arrival order (dev M10).
+        let waited = false;
+        const outcome = this.chatQueue.enqueue(`${identity}\u0000${sessionKey}`, requestId, client.id, async () => {
+            if (waited && !connectionManager.get(client.id)) {
+                Log.info("Dropping queued chat: client disconnected", { clientId: client.id, requestId });
+                return;
+            }
+            await this.runChatTurn(client, message, identity, sessionKey);
+        });
+        if (outcome.status === "full") {
+            Log.warn("Chat rejected: conversation queue full", { clientId: client.id, requestId, limit: outcome.limit });
+            this.sendError(
+                client.id,
+                "CONVERSATION_BUSY",
+                `This conversation already has ${outcome.limit} message(s) waiting. Wait for the current reply to finish, then try again.`,
+                requestId,
+            );
+            return;
+        }
+        if (outcome.status === "queued") {
+            waited = true;
+            Log.info("Chat queued behind an active turn", { clientId: client.id, requestId, ahead: outcome.ahead });
+            this.sendStatus(client.id, "thinking", requestId, `Queued: waiting for ${outcome.ahead} earlier message(s) to finish`);
+        }
+        await outcome.done;
+    }
+
+    /** Cancels a chat that is still waiting in its conversation queue. True if the cancel was handled. */
+    cancelQueued(requestId: string, clientId: string): boolean {
+        const result = this.chatQueue.cancel(requestId, clientId);
+        if (result === "forbidden") {
+            Log.warn("Cancel rejected: queued request belongs to another client", { clientId, requestId });
+            return true;
+        }
+        if (result === "removed") {
+            Log.info("Queued chat cancelled before it started", { clientId, requestId });
+            this.sendStatus(clientId, "idle", requestId, "Cancelled before it started");
+            return true;
+        }
+        return false;
+    }
+
+    private async runChatTurn(client: AuthenticatedClient, message: any, identity: string, sessionKey: string): Promise<void> {
         const requestId = message.id as string;
         // Register the stream before routing (the classifier can take a while) so
         // a cancel sent during routing is honoured.
@@ -79,14 +136,9 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
         const keepAlive = route.tier === "deep" ? 0 : -1;
         const systemPrompt = message.systemPrompt || this.DEFAULT_SYSTEM_PROMPT;
 
-        // Conversation ownership is bound to the authenticating key, so a client
-        // claiming another key's deviceId can never reach that device's history.
-        const deviceId = client.metadata?.deviceId as string | undefined;
-        const identity = deviceId ? `${client.apiKeyId}:${deviceId}` : client.id;
-
         const conversation = conversationManager.getOrCreate(
             identity,
-            message.sessionId || `session-${identity}`,
+            sessionKey,
             systemPrompt,
             model,
         );
@@ -998,6 +1050,7 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
     }
 
     cancelStream(requestId: string): boolean {
+        if (this.chatQueue.cancel(requestId) === "removed") return true;
         approvalBroker.abortRequest(requestId);
         resultBroker.abortRequest(requestId);
         this.voiceRequests.delete(requestId);

@@ -95,6 +95,7 @@ async function boot(): Promise<void> {
     messageRouter.register("cancel", (client, message) => {
         if (message.type === "cancel") {
             // Only the client that started a request may cancel it.
+            if (aiOrchestrator.cancelQueued(message.requestId, client.id)) return;
             const stream = streamManager.get(message.requestId);
             if (stream && stream.clientId !== client.id) {
                 Log.warn("Cancel rejected: request belongs to another client", { clientId: client.id, requestId: message.requestId });
