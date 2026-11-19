@@ -311,3 +311,20 @@ test("Google OAuth start needs loopback or a one-time token (dev M6)", async () 
     assert.notEqual(await run("192.168.1.50", { token: fresh }), 403);
     assert.notEqual(await run("127.0.0.1", {}), 403);
 });
+
+test("WS auth lockout rejects before validating the key (dev M7 / sec L3)", () => {
+    const ws = wsServer as any;
+    const ip = "203.0.113.77";
+    for (let i = 0; i < 10; i++) ws.registerAuthFailure(ip);
+    assert.equal(ws.isLockedOut(ip), true);
+
+    const good = authService.generateKey("lockout-test", "user");
+    let closedWith = 0;
+    const fakeWs = { close: (code: number) => { closedWith = code; }, on: () => {}, readyState: 1, send: () => {} };
+    ws.handleConnection(fakeWs, { url: `/ws?key=${good.key}`, headers: {}, socket: { remoteAddress: ip } });
+    assert.equal(closedWith, 4002, "a correct key must not succeed while locked out");
+
+    ws.authFailures.get(ip).resetAt = Date.now() - 1;
+    ws.pruneAuthFailures(Date.now());
+    assert.equal(ws.authFailures.has(ip), false);
+});

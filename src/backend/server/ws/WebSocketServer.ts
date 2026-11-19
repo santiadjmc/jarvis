@@ -29,8 +29,20 @@ class JarvisWebSocketServer {
         return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(origin);
     }
 
+    private isLockedOut(ip: string): boolean {
+        const entry = this.authFailures.get(ip);
+        return !!entry && Date.now() < entry.resetAt && entry.count >= this.MAX_AUTH_FAILURES;
+    }
+
+    private pruneAuthFailures(now: number): void {
+        for (const [ip, entry] of this.authFailures) {
+            if (now >= entry.resetAt) this.authFailures.delete(ip);
+        }
+    }
+
     private registerAuthFailure(ip: string): boolean {
         const now = Date.now();
+        if (this.authFailures.size > 1000) this.pruneAuthFailures(now);
         const entry = this.authFailures.get(ip);
         if (entry && now < entry.resetAt) {
             entry.count++;
@@ -74,6 +86,13 @@ class JarvisWebSocketServer {
         if (!apiKey) {
             Log.warn("WS rejected: missing API key", { remoteAddress });
             ws.close(4001, "Missing API key");
+            return;
+        }
+
+        // Check the lockout before validating, so a locked-out IP gets no oracle at all.
+        if (this.isLockedOut(remoteAddress)) {
+            Log.warn("WS rejected: too many failed auth attempts", { remoteAddress });
+            ws.close(4002, "Too many failed attempts, slow down");
             return;
         }
 
