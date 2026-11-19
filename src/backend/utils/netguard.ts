@@ -113,6 +113,28 @@ export async function assertPublicHost(host: string): Promise<void> {
     }
 }
 
+/**
+ * Resolves a host once and returns a validated IP literal, so callers can
+ * connect to exactly the address that was checked (no DNS-rebinding TOCTOU).
+ */
+export async function resolvePublicAddress(host: string): Promise<string> {
+    const clean = host.replace(/^\[|\]$/g, "");
+    if (isIP(clean)) {
+        await assertPublicHost(clean);
+        return clean;
+    }
+    await assertPublicHost(clean);
+    let addresses: Array<{ address: string; family: number }>;
+    try {
+        addresses = await lookup(clean, { all: true, verbatim: true });
+    } catch {
+        throw new Error(`Could not resolve host: ${clean}`);
+    }
+    const allowed = allowPrivateNetworks() ? addresses : addresses.filter(a => !isPrivateAddress(a.address));
+    if (allowed.length === 0) throw new Error("Refusing to target private or local addresses");
+    return allowed[0].address;
+}
+
 export async function assertPublicUrl(raw: string): Promise<URL> {
     const url = new URL(raw);
     if (url.protocol !== "http:" && url.protocol !== "https:") {

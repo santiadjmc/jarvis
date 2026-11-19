@@ -9,8 +9,9 @@ import deviceRegistry from "../server/ws/DeviceRegistry";
 import resultBroker from "../tools/ResultBroker";
 import fileTools from "../tools/implementations/fs";
 import gitTools from "../tools/implementations/git";
+import networkTools from "../tools/implementations/network";
 import { stripMarkup } from "../tools/implementations/web";
-import { guardedFetch, isPrivateAddress } from "../utils/netguard";
+import { guardedFetch, isPrivateAddress, resolvePublicAddress } from "../utils/netguard";
 import { checkBrowserRequestUrl } from "../agent/Browser/browserSession";
 
 test("device ids are bound to the authenticating key; spoofed results are rejected (H3)", async () => {
@@ -251,5 +252,25 @@ test("read-only git tools don't execute repo-configured commands (sec M5)", asyn
         assert.deepEqual(pwned, []);
     } finally {
         await rm(repo, { recursive: true, force: true });
+    }
+});
+
+test("ping_host and check_port refuse private targets and option-like hosts (sec M6)", async () => {
+    const previous = process.env.JARVIS_FETCH_ALLOW_PRIVATE;
+    delete process.env.JARVIS_FETCH_ALLOW_PRIVATE;
+    const ctx = { clientId: "t", requestId: "t" };
+    const ping = networkTools.find(t => t.name === "ping_host")!;
+    const port = networkTools.find(t => t.name === "check_port")!;
+    try {
+        for (const host of ["127.0.0.1", "10.0.0.1", "192.168.1.1", "localhost", "-f", "::1"]) {
+            const r = await ping.execute({ host, count: 1 }, ctx);
+            assert.equal(r.success, false, `ping ${host}`);
+            assert.equal(r.data, null, `ping ${host} must be refused before running`);
+        }
+        const r = await port.execute({ host: "127.0.0.1", port: 22 }, ctx);
+        assert.equal(r.success, false);
+        assert.equal(await resolvePublicAddress("8.8.8.8"), "8.8.8.8");
+    } finally {
+        if (previous !== undefined) process.env.JARVIS_FETCH_ALLOW_PRIVATE = previous;
     }
 });

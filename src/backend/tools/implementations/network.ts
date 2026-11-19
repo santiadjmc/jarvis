@@ -1,13 +1,14 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { Socket } from "net";
-import { assertPublicHost } from "../../utils/netguard";
+import { resolvePublicAddress } from "../../utils/netguard";
 import type { ToolContext, ToolResult, ToolSpec } from "../types";
 
 const execFileAsync = promisify(execFile);
 
 function isValidHost(host: string): boolean {
-    return /^[a-zA-Z0-9.\-:]+$/.test(host) && host.length < 256;
+    // A leading '-' would be parsed as an option by ping.
+    return /^[a-zA-Z0-9.\-:]+$/.test(host) && !host.startsWith("-") && host.length < 256;
 }
 
 const pingHost: ToolSpec = {
@@ -28,8 +29,14 @@ const pingHost: ToolSpec = {
         const host = typeof params.host === "string" ? params.host.trim() : "";
         if (!host || !isValidHost(host)) return { success: false, data: null, error: "A valid host is required" };
         const count = Math.max(1, Math.min(10, Number(params.count ?? 3)));
+        let address: string;
         try {
-            const { stdout } = await execFileAsync("ping", ["-c", String(count), "-W", "3", host], { timeout: 12000 });
+            address = await resolvePublicAddress(host);
+        } catch (err: any) {
+            return { success: false, data: null, error: err.message };
+        }
+        try {
+            const { stdout } = await execFileAsync("ping", ["-c", String(count), "-W", "3", address], { timeout: 12000 });
             const loss = stdout.match(/([\d.]+)% packet loss/);
             const timing = stdout.match(/= ([\d.]+)\/([\d.]+)\/([\d.]+)\/([\d.]+) ms/);
             return {
@@ -71,8 +78,9 @@ const checkPort: ToolSpec = {
         if (!Number.isInteger(port) || port < 1 || port > 65535) return { success: false, data: null, error: "port must be between 1 and 65535" };
         const timeoutMs = Math.max(500, Math.min(15000, Number(params.timeoutMs ?? 4000)));
 
+        let address: string;
         try {
-            await assertPublicHost(host);
+            address = await resolvePublicAddress(host);
         } catch (err: any) {
             return { success: false, data: null, error: err.message };
         }
@@ -87,7 +95,7 @@ const checkPort: ToolSpec = {
             socket.once("connect", () => finish(true));
             socket.once("timeout", () => finish(false));
             socket.once("error", () => finish(false));
-            socket.connect(port, host);
+            socket.connect(port, address);
         });
 
         return { success: true, data: { host, port, open } };
