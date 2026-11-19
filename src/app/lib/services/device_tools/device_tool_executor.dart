@@ -27,13 +27,14 @@ int _notificationId = 0;
 
 Future<void> _ensureNotificationsInitialized() async {
   if (_notificationsInitialized) return;
-  _notificationsInitialized = true;
   await _localNotifications.initialize(
     settings: const InitializationSettings(
       android: AndroidInitializationSettings('@mipmap/ic_launcher'),
       linux: LinuxInitializationSettings(defaultActionName: 'Open Jarvis'),
     ),
   );
+  // Only after success, so a failed initialize is retried next time.
+  _notificationsInitialized = true;
 }
 
 final _phoneNumberPattern = RegExp(r'^\+?[0-9]{3,15}$');
