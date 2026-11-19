@@ -53,7 +53,7 @@ const TAINT_SOURCES = new Set([
 const MEMORY_READERS = new Set(["recall", "list_memories"]);
 
 const DEFAULT_TAINTED_RUN_TOOLS = [
-    "get_time", "calculate", "convert_units", "generate_uuid", "get_weather", "list_events", "list_scheduled_tasks", "recall",
+    "get_time", "calculate", "convert_units", "generate_uuid", "list_events", "list_scheduled_tasks", "recall",
 ];
 
 function envInt(name: string, fallback: number, min = 0): number {

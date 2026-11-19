@@ -7,7 +7,7 @@ import scheduleTools from "../tools/implementations/schedule";
 import memoryTools from "../tools/implementations/memory";
 import { listDueTasks, listTasks, addTask, removeTask, markRan } from "../agent/Scheduler/taskStore";
 import { searchMemory } from "../agent/Memory/memoryStore";
-import { createProvenance, isTaintingResult, noteToolResult } from "../utils/provenance";
+import { createProvenance, isTaintingResult, noteToolResult, taintedRunTools } from "../utils/provenance";
 import aiOrchestrator, { formatUntrustedNotes } from "../ai";
 import conversationManager from "../ai/ConversationManager";
 import llmClient from "../ai/LLMClient";
@@ -228,5 +228,20 @@ test("subagents delegated from tainted context are capped and restricted (sec M2
         release();
         await new Promise(r => setTimeout(r, 20));
         llm.chatStream = originalStream;
+    }
+});
+
+test("the default tainted-run tool set is really offline (no get_weather)", () => {
+    const previous = process.env.JARVIS_TAINTED_RUN_TOOLS;
+    delete process.env.JARVIS_TAINTED_RUN_TOOLS;
+    try {
+        const tools = taintedRunTools();
+        assert.equal(tools.has("get_weather"), false, "get_weather makes network calls with model-controlled input");
+        for (const name of tools) {
+            const spec = toolRegistry.get(name);
+            if (spec) assert.notEqual(spec.category, "web", `${name} must not reach the network`);
+        }
+    } finally {
+        if (previous !== undefined) process.env.JARVIS_TAINTED_RUN_TOOLS = previous;
     }
 });
