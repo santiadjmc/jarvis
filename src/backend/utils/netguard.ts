@@ -1,7 +1,7 @@
 import { lookup as dnsLookup } from "dns";
 import { lookup } from "dns/promises";
 import { isIP } from "net";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 
 const MAX_REDIRECTS = 5;
 
@@ -186,14 +186,14 @@ export async function guardedFetch(url: string, init: GuardedFetchInit = {}): Pr
     let body = init.body;
     let headers = init.headers ? { ...init.headers } : undefined;
     for (let redirects = 0; ; redirects++) {
-        const response = await fetch(target, {
+        const response = (await undiciFetch(target, {
             method,
             headers,
             body,
             signal: init.signal,
             redirect: "manual",
             dispatcher: publicDispatcher,
-        } as RequestInit & { dispatcher: Agent });
+        } as unknown as Parameters<typeof undiciFetch>[1])) as unknown as Response;
         if (response.status < 300 || response.status >= 400) return response;
         const location = response.headers.get("location");
         await response.body?.cancel().catch(() => {});
