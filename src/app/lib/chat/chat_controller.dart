@@ -224,6 +224,7 @@ class ChatController extends Notifier<ChatState> {
   String? _activeRequestId;
   String? _sessionId;
   bool _subscribed = false;
+  StreamSubscription<ServerMessage>? _messagesSub;
   bool _loadStarted = false;
   Timer? _persistTimer;
   File? _storeFile;
@@ -237,7 +238,10 @@ class ChatController extends Notifier<ChatState> {
 
   @override
   ChatState build() {
-    final connection = ref.watch(connectionControllerProvider);
+    // Read, don't watch: watching rebuilt (and reset) this notifier on every
+    // connection state change, including each pong. `online` is kept current
+    // by the ref.listen in _initListener.
+    final connection = ref.read(connectionControllerProvider);
     final online = connection.status == ConnectionStatus.connected;
     _sessionId ??= _uuid.v4();
     _initListener();
@@ -314,7 +318,8 @@ class ChatController extends Notifier<ChatState> {
       }
     });
     final messages = ref.read(connectionControllerProvider.notifier).messages;
-    messages.listen((ServerMessage msg) => _handle(msg), onError: (Object e) {
+    _messagesSub?.cancel();
+    _messagesSub = messages.listen((ServerMessage msg) => _handle(msg), onError: (Object e) {
       state = state.copyWith(pendingError: e.toString());
     });
     if (!_ttsHooked) {
@@ -322,6 +327,8 @@ class ChatController extends Notifier<ChatState> {
       ref.read(ttsControllerProvider.notifier).setOnDrained(_onSpeechDrained);
     }
     ref.onDispose(() {
+      _messagesSub?.cancel();
+      _messagesSub = null;
       _subscribed = false;
     });
   }
