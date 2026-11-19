@@ -89,6 +89,10 @@ class VoiceController extends Notifier<VoiceState> {
     }
   }
 
+  void clearError() {
+    if (state.error != null) state = state.copyWith(clearError: true);
+  }
+
   Future<void> stop() async {
     if (_isNative) {
       await _stopNative();

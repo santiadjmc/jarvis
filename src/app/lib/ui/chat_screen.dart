@@ -746,13 +746,15 @@ class _VoiceButton extends ConsumerWidget {
     final voice = ref.watch(voiceControllerProvider);
     final notifier = ref.read(voiceControllerProvider.notifier);
 
-    if (voice.error != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(SnackBar(content: Text(voice.error!)));
-      });
-    }
+    // Show each voice error once (on transition), then clear it; showing it from
+    // build re-displayed it on every rebuild (e.g. each sound-level update).
+    ref.listen<String?>(voiceControllerProvider.select((s) => s.error), (previous, next) {
+      if (next == null || next == previous) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(next)));
+      Future.microtask(notifier.clearError);
+    });
 
     final listening = voice.status == VoiceStatus.listening;
     final transcribing = voice.status == VoiceStatus.transcribing;
