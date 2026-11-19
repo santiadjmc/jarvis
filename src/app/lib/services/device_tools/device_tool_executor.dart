@@ -33,6 +33,17 @@ Future<void> _ensureNotificationsInitialized() async {
   );
 }
 
+final _phoneNumberPattern = RegExp(r'^\+?[0-9]{3,15}$');
+
+/// Normalizes a dialable phone number, or returns null when it is not one.
+/// Strips common separators, then accepts only `+` and 3-15 digits, so MMI/USSD
+/// codes (anything with `*` or `#`) and other dialer strings are rejected.
+String? normalizePhoneNumber(String raw) {
+  if (raw.contains('*') || raw.contains('#')) return null;
+  final cleaned = raw.trim().replaceAll(RegExp(r'[\s\-().]'), '');
+  return _phoneNumberPattern.hasMatch(cleaned) ? cleaned : null;
+}
+
 class DeviceToolResult {
   const DeviceToolResult({required this.success, this.data, this.error, this.executionTimeMs});
 
@@ -405,8 +416,12 @@ class DeviceToolExecutor {
   }
 
   Future<DeviceToolResult> _callNumber(Map<String, dynamic> params) async {
-    final number = (params['number'] as String?)?.trim() ?? '';
-    if (number.isEmpty) return DeviceToolResult.failure('number is required');
+    final raw = (params['number'] as String?)?.trim() ?? '';
+    if (raw.isEmpty) return DeviceToolResult.failure('number is required');
+    final number = normalizePhoneNumber(raw);
+    if (number == null) {
+      return DeviceToolResult.failure('Invalid phone number: use digits with an optional leading + (no * or # codes)');
+    }
     try {
       final called = await FlutterPhoneDialer.callNumber(number);
       return called
