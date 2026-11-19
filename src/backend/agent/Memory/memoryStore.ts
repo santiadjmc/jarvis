@@ -89,7 +89,8 @@ export async function searchMemory(query: string, k = 5, minScore = 0.35): Promi
     }
 
     return data.entries
-        .filter(e => e.embedding && e.embedding.length > 0)
+        // Entries embedded with a different model (other dimension) can't be compared.
+        .filter(e => e.embedding && e.embedding.length === queryVec.length)
         .map(e => ({ content: e.content, score: cosine(queryVec, e.embedding!), createdAt: e.createdAt }))
         .filter(r => r.score >= minScore)
         .sort((a, b) => b.score - a.score)
