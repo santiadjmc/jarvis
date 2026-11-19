@@ -71,8 +71,8 @@ class Server {
             // either a request from this machine or a one-time token issued to an
             // authenticated client (config key "googleConnectUrl").
             const token = typeof req.query.token === "string" ? req.query.token : "";
-            if (!isLoopback(req.socket.remoteAddress) && !(token && consumeConnectToken(token))) {
-                res.status(403).send(oauthPage("Not authorized", "Open this link on the Jarvis server itself, or request a one-time connect link from the Jarvis app."));
+            if (!isTrustedLocalRequest(req) && !(token && consumeConnectToken(token))) {
+                res.status(403).send(oauthPage("Not authorized", "Use \"Connect Google\" in the Jarvis app to get a one-time sign-in link, or open this page in a browser on the Jarvis server itself."));
                 return;
             }
             if (!isConfigured()) {
@@ -144,6 +144,25 @@ class Server {
 
 function isLoopback(address: string | undefined): boolean {
     return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+const PROXY_HEADERS = ["forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip"];
+
+/** TRUST_PROXY=1 says Jarvis runs behind a reverse proxy, so loopback means nothing. */
+export function behindProxy(): boolean {
+    return /^(1|true|yes|on)$/i.test((process.env.TRUST_PROXY || "").trim());
+}
+
+/**
+ * A request really made on the server itself. Behind a reverse proxy on the same
+ * host every request arrives from 127.0.0.1, so a request carrying proxy headers
+ * (or any request when TRUST_PROXY is on) is not trusted as local.
+ */
+export function isTrustedLocalRequest(req: { socket: { remoteAddress?: string }; headers?: Record<string, unknown> }): boolean {
+    if (behindProxy()) return false;
+    const headers = req.headers || {};
+    if (PROXY_HEADERS.some(h => headers[h] !== undefined)) return false;
+    return isLoopback(req.socket.remoteAddress);
 }
 
 function oauthPage(title: string, message: string): string {

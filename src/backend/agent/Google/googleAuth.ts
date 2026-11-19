@@ -6,6 +6,13 @@ import { google } from "googleapis";
 import type { OAuth2Client, Credentials } from "google-auth-library";
 import Log from "../../Log";
 
+/**
+ * How users (re)connect Google. /oauth/google/start only works from the server
+ * itself or with a one-time token, which the app gets via the "googleConnectUrl"
+ * config key, so point people at the app.
+ */
+export const GOOGLE_CONNECT_HINT = "Use \"Connect Google\" in the Jarvis app, which opens a one-time sign-in link for this server. (Opening /oauth/google/start directly only works in a browser on the Jarvis server itself.)";
+
 export const GOOGLE_SCOPES = [
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/calendar",
@@ -157,7 +164,7 @@ export function status(): { connected: boolean; connectedAt: number | null; expi
 export async function getGoogleClient(): Promise<OAuth2Client> {
     const tokens = loadTokens();
     if (!tokens || !tokens.refresh_token) {
-        throw new Error("No Google account connected. Ask the user to open the Jarvis server's /oauth/google/start URL in a browser to connect one.");
+        throw new Error(`No Google account connected. Tell the user how to connect one: ${GOOGLE_CONNECT_HINT}`);
     }
     const client = buildOAuthClient();
     client.setCredentials(tokens);

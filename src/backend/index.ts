@@ -401,8 +401,8 @@ function startGoogleAuthWatchdog(): void {
         lastNudgeAt = Date.now();
         const streamId = uuid();
         const text = info.expiresInDays <= 0
-            ? "Heads up — my connection to your Google account just expired. Open /oauth/google/start in a browser whenever you get a chance to reconnect it."
-            : `Heads up — my connection to your Google account expires in about ${info.expiresInDays} day${info.expiresInDays === 1 ? "" : "s"}. Open /oauth/google/start in a browser to reconnect it before then.`;
+            ? "Heads up — my connection to your Google account just expired. Tap \"Connect Google\" in the app whenever you get a chance to reconnect it."
+            : `Heads up — my connection to your Google account expires in about ${info.expiresInDays} day${info.expiresInDays === 1 ? "" : "s"}. Tap "Connect Google" in the app to reconnect it before then.`;
         connectionManager.broadcast(JSON.stringify({ type: "token", id: uuid(), content: text, requestId: streamId, kind: "assistant", proactive: true }));
         connectionManager.broadcast(JSON.stringify({ type: "stream_end", id: uuid(), requestId: streamId, fullResponse: text, model: "system", proactive: true }));
         Log.info("Google auth expiry nudge sent", { expiresInDays: info.expiresInDays });

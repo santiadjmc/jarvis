@@ -192,6 +192,7 @@ flutter test
 ## 🛡️ Security notes
 
 - Jarvis is designed for a trusted local network. Do not expose the server directly to the public internet without a reverse proxy, TLS, and an authentication review.
+- Behind a reverse proxy, set `TRUST_PROXY=1`. Otherwise a proxy on the same host makes every request look local. Jarvis also refuses to treat a request as local when it carries `X-Forwarded-For`, `Forwarded` or `X-Real-IP` headers, so `/oauth/google/start` then always needs the one-time link from the app's "Connect Google" button.
 - `.env` contains secrets. It is git-ignored; keep it that way and rotate any key that has ever been committed.
 - The server binds to `0.0.0.0` by default so phones on the LAN can connect. Set `HOST=127.0.0.1` if you only use the desktop client.
 - `fetch_url`, `http_request`, `check_port` and the headless browser block loopback, private, link-local, and other reserved addresses by default (redirects and browser subresources included). Set `JARVIS_FETCH_ALLOW_PRIVATE=1` only if you understand the SSRF risk. `ping_host` is exempt so you can check LAN devices; it still resolves the name first and never passes option-like hosts to `ping`.

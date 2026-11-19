@@ -15,7 +15,8 @@ import { guardedFetch, isPrivateAddress, resolvePublicAddress } from "../utils/n
 import { checkBrowserRequestUrl } from "../agent/Browser/browserSession";
 import toolRegistry from "../tools/registry";
 import Server from "../server";
-import { consumeConnectToken, issueConnectToken } from "../agent/Google/googleAuth";
+import { consumeConnectToken, GOOGLE_CONNECT_HINT, issueConnectToken } from "../agent/Google/googleAuth";
+import googleAccountTools from "../tools/implementations/googleAccount";
 
 test("device ids are bound to the authenticating key; spoofed results are rejected (H3)", async () => {
     const deviceId = crypto.randomUUID();
@@ -313,15 +314,38 @@ test("Google OAuth start needs loopback or a one-time token (dev M6)", async () 
     // Loopback requests still work (server-side browser flow).
     const app = new Server(0, "127.0.0.1") as any;
     const handler = app.app.router.stack.find((l: any) => l.route?.path === "/oauth/google/start").route.stack[0].handle;
-    const run = (remoteAddress: string, query: Record<string, string>) => new Promise<number>((resolve) => {
-        const res: any = { statusCode: 200, status(c: number) { this.statusCode = c; return this; }, send() { resolve(this.statusCode); }, redirect() { resolve(302); } };
-        handler({ socket: { remoteAddress }, query }, res);
+    let body = "";
+    const run = (remoteAddress: string, query: Record<string, string>, headers: Record<string, string> = {}) => new Promise<number>((resolve) => {
+        const res: any = { statusCode: 200, status(c: number) { this.statusCode = c; return this; }, send(b: string) { body = b; resolve(this.statusCode); }, redirect() { resolve(302); } };
+        handler({ socket: { remoteAddress }, query, headers }, res);
     });
     assert.equal(await run("192.168.1.50", {}), 403);
+    assert.match(body, /Connect Google/, "the 403 page points at the app's connect flow");
     assert.equal(await run("192.168.1.50", { token: "forged" }), 403);
     const fresh = issueConnectToken();
     assert.notEqual(await run("192.168.1.50", { token: fresh }), 403);
     assert.notEqual(await run("127.0.0.1", {}), 403);
+
+    // Behind a reverse proxy every request comes from loopback: don't trust that.
+    assert.equal(await run("127.0.0.1", {}, { "x-forwarded-for": "203.0.113.5" }), 403);
+    assert.equal(await run("::1", {}, { forwarded: "for=203.0.113.5" }), 403);
+    assert.equal(await run("127.0.0.1", {}, { "x-real-ip": "203.0.113.5" }), 403);
+    assert.notEqual(await run("127.0.0.1", { token: issueConnectToken() }, { "x-forwarded-for": "203.0.113.5" }), 403);
+    const previous = process.env.TRUST_PROXY;
+    process.env.TRUST_PROXY = "1";
+    try {
+        assert.equal(await run("127.0.0.1", {}), 403, "TRUST_PROXY=1 never trusts loopback alone");
+        assert.notEqual(await run("127.0.0.1", { token: issueConnectToken() }), 403);
+    } finally {
+        if (previous === undefined) delete process.env.TRUST_PROXY;
+        else process.env.TRUST_PROXY = previous;
+    }
+});
+
+test("Google connect hints point at the app's Connect Google flow, not the bare start URL", () => {
+    const statusTool = googleAccountTools.find(t => t.name === "google_account_status")!;
+    assert.match(statusTool.description, /Connect Google/);
+    assert.match(GOOGLE_CONNECT_HINT, /Connect Google/);
 });
 
 test("WS auth lockout rejects before validating the key (dev M7 / sec L3)", () => {
