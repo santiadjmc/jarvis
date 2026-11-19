@@ -369,10 +369,19 @@ class DeviceToolExecutor {
       if (direct == true) return DeviceToolResult(success: true, data: {'launched': app, 'via': 'package_name'});
 
       final apps = await InstalledApps.getInstalledApps();
-      final match = apps.cast<AppInfo?>().firstWhere(
-            (a) => a!.name.toLowerCase().contains(app.toLowerCase()),
-            orElse: () => null,
-          );
+      final wanted = app.toLowerCase();
+      AppInfo? firstWhereName(bool Function(String name) test) {
+        for (final a in apps) {
+          if (test(a.name.toLowerCase())) return a;
+        }
+        return null;
+      }
+
+      // Prefer an exact name, then a prefix; substring matches only for
+      // queries long enough not to hit an arbitrary app (e.g. "a").
+      final match = firstWhereName((n) => n == wanted) ??
+          firstWhereName((n) => n.startsWith(wanted)) ??
+          (wanted.length >= 3 ? firstWhereName((n) => n.contains(wanted)) : null);
       if (match == null) return DeviceToolResult.failure('No installed app found matching "$app"');
       final launched = await InstalledApps.startApp(match.packageName);
       return launched == true
