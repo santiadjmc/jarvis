@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'settings_migration.dart';
+
 class AppConfig {
   const AppConfig({
     this.host = defaultHost,
@@ -111,15 +113,22 @@ class SettingsController extends Notifier<AppConfig> {
       await prefs.setString(_kDeviceId, deviceId);
     }
     AppConfig._storedDeviceId = deviceId;
+    final host = prefs.getString(_kHost);
+    var allowInsecureWs = prefs.getBool(_kAllowInsecureWs);
+    final migrated = migrateAllowInsecureWs(savedHost: host, storedFlag: allowInsecureWs);
+    if (migrated != null) {
+      allowInsecureWs = migrated;
+      await prefs.setBool(_kAllowInsecureWs, migrated);
+    }
     if (revision != _revision) return;
     state = AppConfig(
-      host: prefs.getString(_kHost) ?? AppConfig.defaultHost,
+      host: host ?? AppConfig.defaultHost,
       apiKey: await _readApiKey(prefs),
       model: prefs.getString(_kModel),
       deviceId: deviceId,
       deviceName: prefs.getString(_kDeviceName),
       voiceReplies: prefs.getBool(_kVoiceReplies) ?? true,
-      allowInsecureWs: prefs.getBool(_kAllowInsecureWs) ?? false,
+      allowInsecureWs: allowInsecureWs ?? false,
     );
   }
 

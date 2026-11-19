@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show TlsException;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -149,12 +150,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     try {
       uri = _webSocketUri(host, allowInsecure: ref.read(settingsControllerProvider).allowInsecureWs);
     } on InsecureTransportException catch (e) {
-      // A configuration problem, not a network one: don't retry in a loop.
-      _connectTimer?.cancel();
-      _inactivityTimer?.cancel();
-      _connectResult?.complete(false);
-      _connectResult = null;
-      state = state.copyWith(status: ConnectionStatus.disconnected, errorMessage: e.message);
+      _stopWithError(e.message);
       return;
     } catch (e) {
       _failConnect('Could not reach server: $e');
@@ -169,9 +165,8 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
       channel.ready.then(
         (_) {},
         onError: (Object e) {
-          if (identical(_channel, channel)) {
-            _failConnect('Could not reach server: $e');
-          }
+          if (!identical(_channel, channel)) return;
+          _onSocketError(uri, e, 'Could not reach server');
         },
       );
       _connectTimer?.cancel();
@@ -180,7 +175,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
         _closeSocket(channel);
         _scheduleReconnect('Connection timed out${host.isEmpty ? '' : ' — is $host reachable?'}');
       });
-      _pump(channel);
+      _pump(channel, uri);
     } catch (e) {
       _failConnect('Could not reach server: $e');
     }
@@ -213,6 +208,46 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     return parsed.replace(scheme: scheme, path: basePath.endsWith('/ws') ? basePath : '$basePath/ws');
   }
 
+  static const noTlsMessage =
+      "The server doesn't seem to use TLS. Turn on Insecure LAN (ws://) in settings or set up TLS.";
+
+  /// True when [error] from opening a `wss://` socket means the server isn't
+  /// speaking TLS at all (e.g. the stock backend serving plain HTTP), as
+  /// opposed to a transient network failure worth retrying.
+  static bool looksLikeTlsMismatch(Object error) {
+    Object? e = error;
+    if (e is WebSocketChannelException && e.inner != null) e = e.inner;
+    if (e is TlsException) return true; // includes HandshakeException
+    final text = error.toString();
+    return text.contains('HandshakeException') ||
+        text.contains('TlsException') ||
+        text.contains('WRONG_VERSION_NUMBER') ||
+        text.contains('wrong version number') ||
+        text.contains('record overflow');
+  }
+
+  void _onSocketError(Uri uri, Object error, String prefix) {
+    // Only before the first successful connect: a TLS hiccup on an
+    // established wss setup is a network problem worth retrying.
+    if (uri.scheme == 'wss' && !state.hasConnectedOnce && looksLikeTlsMismatch(error)) {
+      _stopWithError(noTlsMessage);
+      return;
+    }
+    _failConnect('$prefix: $error');
+  }
+
+  /// A configuration problem, not a network one: report it and don't retry.
+  void _stopWithError(String message) {
+    _closeSocket();
+    _connectTimer?.cancel();
+    _inactivityTimer?.cancel();
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _connectResult?.complete(false);
+    _connectResult = null;
+    state = state.copyWith(status: ConnectionStatus.disconnected, errorMessage: message);
+  }
+
   void _failConnect(String message) {
     _closeSocket();
     _connectTimer?.cancel();
@@ -235,7 +270,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
     } catch (_) {}
   }
 
-  void _pump(WebSocketChannel channel) {
+  void _pump(WebSocketChannel channel, Uri uri) {
     channel.stream.listen(
       (raw) {
         if (!identical(_channel, channel)) return;
@@ -267,7 +302,7 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
       onError: (Object e) {
         if (!identical(_channel, channel)) return;
         if (!_manualClose) {
-          _failConnect('Connection error: $e');
+          _onSocketError(uri, e, 'Connection error');
         }
       },
       onDone: () {
