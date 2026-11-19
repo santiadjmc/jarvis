@@ -224,10 +224,13 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   /// speaking TLS at all (e.g. the stock backend serving plain HTTP), as
   /// opposed to a transient network failure worth retrying.
   static bool looksLikeTlsMismatch(Object error) {
+    final text = error.toString();
+    // A real TLS server with a certificate we don't trust is a different
+    // problem; the "turn on Insecure LAN" advice would be wrong there.
+    if (text.contains('CERTIFICATE_VERIFY_FAILED')) return false;
     Object? e = error;
     if (e is WebSocketChannelException && e.inner != null) e = e.inner;
     if (e is TlsException) return true; // includes HandshakeException
-    final text = error.toString();
     return text.contains('HandshakeException') ||
         text.contains('TlsException') ||
         text.contains('WRONG_VERSION_NUMBER') ||

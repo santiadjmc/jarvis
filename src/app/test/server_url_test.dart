@@ -21,6 +21,11 @@ void main() {
   test('TLS mismatch detection', () {
     expect(ConnectionController.looksLikeTlsMismatch(const HandshakeLike()), isTrue);
     expect(ConnectionController.looksLikeTlsMismatch(Exception('Connection refused')), isFalse);
+    expect(
+      ConnectionController.looksLikeTlsMismatch(
+          Exception('HandshakeException: Handshake error in client (OS Error: CERTIFICATE_VERIFY_FAILED: self signed certificate)')),
+      isFalse,
+    );
   });
 }
 
