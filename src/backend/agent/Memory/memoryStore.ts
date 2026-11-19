@@ -1,9 +1,9 @@
 import { v4 as uuid } from "uuid";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join, dirname } from "path";
+import { join } from "path";
 import { homedir } from "os";
 import llmClient from "../../ai/LLMClient";
 import Log from "../../Log";
+import { loadJsonStore, saveJsonAtomic } from "../../utils/jsonStore";
 
 export interface MemoryEntry {
     id: string;
@@ -33,19 +33,11 @@ function storePath(): string {
 }
 
 function load(): MemoryFile {
-    const path = storePath();
-    try {
-        if (!existsSync(path)) return { entries: [] };
-        return JSON.parse(readFileSync(path, "utf-8")) as MemoryFile;
-    } catch {
-        return { entries: [] };
-    }
+    return loadJsonStore(storePath(), "entries", "memory") as unknown as MemoryFile;
 }
 
 function save(data: MemoryFile): void {
-    const path = storePath();
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(data, null, 2), { mode: 0o600 });
+    saveJsonAtomic(storePath(), data);
 }
 
 async function embed(text: string): Promise<number[] | null> {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import conversationManager from "../ai/ConversationManager";
 import toolRegistry from "../tools/registry";
+import { addTask, listTasks } from "../agent/Scheduler/taskStore";
 import llmClient from "../ai/LLMClient";
 import streamManager, { isStreamTimeout } from "../server/ws/StreamManager";
 import { closeBrowser, listPageIds, openPage } from "../agent/Browser/browserSession";
@@ -175,4 +176,33 @@ test("messages added while compacting are kept (dev H3)", () => {
     const contents = conversationManager.getMessages(conversation.id).map(m => m.content);
     assert.deepEqual(contents.slice(-3), ["message 19", "late question", "late answer"]);
     conversationManager.delete(conversation.id);
+});
+
+test("a corrupt JSON store is backed up instead of being overwritten (dev H4)", async () => {
+    const { mkdtemp, writeFile, readFile, readdir, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "jarvis-store-"));
+    const previous = process.env.JARVIS_DATA_DIR;
+    process.env.JARVIS_DATA_DIR = dir;
+    try {
+        const truncated = '{"tasks": [{"id": "a", "instructions": "precious"';
+        await writeFile(join(dir, "tasks.json"), truncated);
+        addTask("new task", Date.now() + 60_000);
+
+        const files = await readdir(dir);
+        const backup = files.find(f => f.startsWith("tasks.json.corrupt-"));
+        assert.ok(backup, `expected a backup, got ${files.join(", ")}`);
+        assert.equal(await readFile(join(dir, backup!), "utf-8"), truncated);
+        assert.equal(listTasks().length, 1);
+        assert.equal(files.some(f => f.endsWith(".tmp")), false);
+
+        // Valid JSON with the wrong shape must not crash with a TypeError.
+        await writeFile(join(dir, "tasks.json"), "{}");
+        assert.doesNotThrow(() => addTask("another", Date.now() + 60_000));
+    } finally {
+        if (previous === undefined) delete process.env.JARVIS_DATA_DIR;
+        else process.env.JARVIS_DATA_DIR = previous;
+        await rm(dir, { recursive: true, force: true });
+    }
 });

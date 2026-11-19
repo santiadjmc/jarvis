@@ -1,8 +1,8 @@
 import { v4 as uuid } from "uuid";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join, dirname } from "path";
+import { join } from "path";
 import { homedir } from "os";
 import Log from "../../Log";
+import { loadJsonStore, saveJsonAtomic } from "../../utils/jsonStore";
 
 export interface ScheduledTask {
     id: string;
@@ -25,20 +25,11 @@ function storePath(): string {
 }
 
 function load(): TaskFile {
-    const path = storePath();
-    try {
-        if (!existsSync(path)) return { tasks: [] };
-        return JSON.parse(readFileSync(path, "utf-8")) as TaskFile;
-    } catch (err: any) {
-        Log.warn("Failed to load scheduled tasks, starting fresh", { error: err.message });
-        return { tasks: [] };
-    }
+    return loadJsonStore(storePath(), "tasks", "scheduled tasks") as unknown as TaskFile;
 }
 
 function save(data: TaskFile): void {
-    const path = storePath();
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(data, null, 2), { mode: 0o600 });
+    saveJsonAtomic(storePath(), data);
 }
 
 export function listTasks(): ScheduledTask[] {
