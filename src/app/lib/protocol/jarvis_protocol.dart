@@ -426,7 +426,12 @@ sealed class ServerMessage {
     if (decoded is! Map<String, dynamic>) {
       throw const FormatException('Server frame is not a JSON object');
     }
-    return fromJson(decoded);
+    try {
+      return fromJson(decoded);
+    } on TypeError catch (e) {
+      // A field had an unexpected type/null; report it like any malformed frame.
+      throw FormatException('Malformed ${decoded['type']} frame: $e');
+    }
   }
 
   static ServerMessage fromJson(Map<String, dynamic> json) {
