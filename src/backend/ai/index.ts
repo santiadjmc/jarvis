@@ -241,7 +241,9 @@ Be concise unless detail is requested. Always aim to be maximally helpful.`;
                 return;
             }
             Log.error("Agent stream error", err);
-            if (model !== modelManager.getActive()) {
+            // Only fall back if nothing was streamed yet; otherwise the client would
+            // receive two concatenated answers.
+            if (model !== modelManager.getActive() && streamManager.getFullResponse(streamId) === "") {
                 const fallback = modelManager.getFallback();
                 if (fallback && fallback !== model) {
                     Log.info("Retrying with fallback model", { fallback, original: model });
