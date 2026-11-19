@@ -30,8 +30,8 @@ test("device ids are bound to the authenticating key; spoofed results are reject
 
     const requestId = crypto.randomUUID();
     const pending = resultBroker.wait(requestId, "call_1", victimConn, 5000, undefined, deviceId, "key-victim");
-    assert.equal(resultBroker.resolve(attackerConn, requestId, "call_1", { success: true, data: "forged" }, deviceId, "key-attacker"), false);
-    assert.equal(resultBroker.resolve(victimConn, requestId, "call_1", { success: true, data: "real" }, deviceId, "key-victim"), true);
+    assert.equal(resultBroker.resolve(attackerConn, requestId, "call_1", { success: true, data: "forged" }, deviceId, "key-attacker"), "rejected");
+    assert.equal(resultBroker.resolve(victimConn, requestId, "call_1", { success: true, data: "real" }, deviceId, "key-victim"), "accepted");
     assert.equal((await pending).data, "real");
 
     // Same key reconnecting on a new connection is still allowed.

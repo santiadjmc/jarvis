@@ -117,13 +117,17 @@ async function boot(): Promise<void> {
                 }));
                 return;
             }
-            const resolved = approvalBroker.resolve(message.requestId, message.callId, message.action, client.id);
-            Log.info("Tool response received", {
+            const outcome = approvalBroker.resolve(
+                message.requestId, message.callId, message.action,
+                client.id, client.apiKeyId, deviceRegistry.getDeviceId(client.id),
+            );
+            // Re-sent approvals (queued by the app across a reconnect) are expected: debug only.
+            (outcome === "duplicate" ? Log.debug : Log.info).call(Log, "Tool response received", {
                 clientId: client.id,
                 requestId: message.requestId,
                 callId: message.callId,
                 action: message.action,
-                resolved,
+                outcome,
             });
         }
     });
@@ -162,18 +166,19 @@ async function boot(): Promise<void> {
     messageRouter.register("tool_execute_result", (client, message) => {
         if (message.type !== "tool_execute_result") return;
         const deviceId = deviceRegistry.getDeviceId(client.id);
-        const resolved = resultBroker.resolve(client.id, message.requestId, message.callId, {
+        const outcome = resultBroker.resolve(client.id, message.requestId, message.callId, {
             success: message.success,
             data: message.data,
             error: message.error,
             executionTimeMs: message.executionTimeMs,
         }, deviceId, client.apiKeyId);
-        Log.info("Device tool result received", {
+        // Re-sent results (queued by the app across a reconnect) are expected: debug only.
+        (outcome === "duplicate" ? Log.debug : Log.info).call(Log, "Device tool result received", {
             clientId: client.id,
             requestId: message.requestId,
             callId: message.callId,
             success: message.success,
-            resolved,
+            outcome,
         });
     });
 
