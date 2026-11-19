@@ -365,11 +365,10 @@ class ConnectionController extends Notifier<ConnectionState> with WidgetsBinding
   }
 
   Future<void> _sendDeviceHello() async {
-    var cfg = ref.read(settingsControllerProvider);
-    if (cfg.deviceId == null) {
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      cfg = ref.read(settingsControllerProvider);
-    }
+    // Wait for persisted settings so the stored device id is used, not a
+    // random one generated before prefs were read.
+    await ref.read(settingsControllerProvider.notifier).loaded.timeout(const Duration(seconds: 5), onTimeout: () {});
+    final cfg = ref.read(settingsControllerProvider);
     final meta = await DeviceToolExecutor.instance.buildMeta(cfg);
     final sent = _send(JsonEncoder().convert(DeviceHelloMessage(
       id: _uuid.v4(),

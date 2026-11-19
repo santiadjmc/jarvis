@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -80,6 +81,10 @@ class SettingsController extends Notifier<AppConfig> {
   static const _kAllowInsecureWs = 'jarvis.allow_insecure_ws';
   static const _secureStorage = FlutterSecureStorage();
   int _revision = 0;
+  final Completer<void> _loaded = Completer<void>();
+
+  /// Completes once persisted settings (including the device id) are loaded.
+  Future<void> get loaded => _loaded.future;
 
   @override
   AppConfig build() {
@@ -88,6 +93,16 @@ class SettingsController extends Notifier<AppConfig> {
   }
 
   Future<void> _load() async {
+    try {
+      await _loadFromPrefs();
+    } catch (e) {
+      debugPrint('Jarvis: failed to load settings: $e');
+    } finally {
+      if (!_loaded.isCompleted) _loaded.complete();
+    }
+  }
+
+  Future<void> _loadFromPrefs() async {
     final revision = _revision;
     final prefs = await SharedPreferences.getInstance();
     var deviceId = prefs.getString(_kDeviceId) ?? AppConfig._storedDeviceId;
@@ -150,8 +165,8 @@ class SettingsController extends Notifier<AppConfig> {
     await prefs.remove(_kDeviceName);
     await prefs.remove(_kVoiceReplies);
     await prefs.remove(_kAllowInsecureWs);
-    AppConfig._storedDeviceId = null;
-    state = const AppConfig();
+    // jarvis.device_id stays in prefs, so keep using the same id in memory too.
+    state = AppConfig(deviceId: state.deviceId ?? AppConfig._storedDeviceId);
   }
 
   /// Reads the API key from the platform keystore, migrating any key left in
