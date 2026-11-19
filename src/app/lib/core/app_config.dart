@@ -2,6 +2,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AppConfig {
@@ -77,6 +78,7 @@ class SettingsController extends Notifier<AppConfig> {
   static const _kDeviceName = 'jarvis.device_name';
   static const _kVoiceReplies = 'jarvis.voice_replies';
   static const _kAllowInsecureWs = 'jarvis.allow_insecure_ws';
+  static const _secureStorage = FlutterSecureStorage();
   int _revision = 0;
 
   @override
@@ -97,7 +99,7 @@ class SettingsController extends Notifier<AppConfig> {
     if (revision != _revision) return;
     state = AppConfig(
       host: prefs.getString(_kHost) ?? AppConfig.defaultHost,
-      apiKey: prefs.getString(_kKey),
+      apiKey: await _readApiKey(prefs),
       model: prefs.getString(_kModel),
       deviceId: deviceId,
       deviceName: prefs.getString(_kDeviceName),
@@ -127,7 +129,7 @@ class SettingsController extends Notifier<AppConfig> {
     );
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kHost, state.host);
-    if (apiKey != null) await prefs.setString(_kKey, apiKey);
+    if (apiKey != null) await _writeApiKey(prefs, apiKey);
     if (model != null) await prefs.setString(_kModel, model);
     if (deviceName != null) await prefs.setString(_kDeviceName, deviceName);
     if (voiceReplies != null) await prefs.setBool(_kVoiceReplies, voiceReplies);
@@ -139,12 +141,45 @@ class SettingsController extends Notifier<AppConfig> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kHost);
     await prefs.remove(_kKey);
+    try {
+      await _secureStorage.delete(key: _kKey);
+    } catch (e) {
+      debugPrint('Jarvis: could not clear API key from secure storage: $e');
+    }
     await prefs.remove(_kModel);
     await prefs.remove(_kDeviceName);
     await prefs.remove(_kVoiceReplies);
     await prefs.remove(_kAllowInsecureWs);
     AppConfig._storedDeviceId = null;
     state = const AppConfig();
+  }
+
+  /// Reads the API key from the platform keystore, migrating any key left in
+  /// plaintext SharedPreferences by older versions.
+  static Future<String?> _readApiKey(SharedPreferences prefs) async {
+    final legacy = prefs.getString(_kKey);
+    try {
+      final stored = await _secureStorage.read(key: _kKey);
+      if (legacy != null) {
+        if (stored == null) await _secureStorage.write(key: _kKey, value: legacy);
+        await prefs.remove(_kKey);
+      }
+      return stored ?? legacy;
+    } catch (e) {
+      // No usable keystore (e.g. Linux without a secret service): keep the old behaviour.
+      debugPrint('Jarvis: secure storage unavailable, using preferences: $e');
+      return legacy;
+    }
+  }
+
+  static Future<void> _writeApiKey(SharedPreferences prefs, String apiKey) async {
+    try {
+      await _secureStorage.write(key: _kKey, value: apiKey);
+      await prefs.remove(_kKey);
+    } catch (e) {
+      debugPrint('Jarvis: secure storage unavailable, using preferences: $e');
+      await prefs.setString(_kKey, apiKey);
+    }
   }
 
   static String _generateId() {

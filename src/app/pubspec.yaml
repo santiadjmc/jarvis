@@ -14,6 +14,7 @@ dependencies:
   flutter_riverpod: ^3.0.2
   web_socket_channel: ^3.0.3
   shared_preferences: ^2.5.4
+  flutter_secure_storage: ^11.2.0
   path_provider: ^2.1.5
   speech_to_text: ^7.2.0
   record: ^7.1.2
