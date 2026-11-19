@@ -17,6 +17,8 @@ export const GOOGLE_SCOPES = [
 
 interface StoredTokens extends Credentials {
     savedAt: number;
+    /** When the current refresh token stops working, if known. */
+    refreshExpiresAt?: number | null;
 }
 
 function dataDir(): string {
@@ -37,10 +39,28 @@ function loadTokens(): StoredTokens | null {
     }
 }
 
+/**
+ * expiry_date is the ~1h access token, refreshed on demand, so it says nothing
+ * about whether the connection is healthy. The refresh token's lifetime comes
+ * from Google's refresh_token_expires_in (sent for time-limited "Testing" apps)
+ * or GOOGLE_REFRESH_TOKEN_DAYS; otherwise it is treated as non-expiring.
+ */
+function refreshExpiry(tokens: Credentials, previous: StoredTokens | null, now: number): number | null {
+    if (previous?.refresh_token && previous.refresh_token === tokens.refresh_token) {
+        return previous.refreshExpiresAt ?? null;
+    }
+    const expiresIn = Number((tokens as { refresh_token_expires_in?: unknown }).refresh_token_expires_in);
+    if (Number.isFinite(expiresIn) && expiresIn > 0) return now + expiresIn * 1000;
+    const days = parseFloat(process.env.GOOGLE_REFRESH_TOKEN_DAYS || "");
+    if (Number.isFinite(days) && days > 0) return now + days * 86400000;
+    return null;
+}
+
 function saveTokens(tokens: Credentials): void {
     const dir = dataDir();
     mkdirSync(dir, { recursive: true });
-    const stored: StoredTokens = { ...tokens, savedAt: Date.now() };
+    const now = Date.now();
+    const stored: StoredTokens = { ...tokens, savedAt: now, refreshExpiresAt: refreshExpiry(tokens, loadTokens(), now) };
     writeFileSync(tokenPath(), JSON.stringify(stored, null, 2), { mode: 0o600 });
 }
 
@@ -125,7 +145,7 @@ export function status(): { connected: boolean; connectedAt: number | null; expi
     if (!tokens || !tokens.refresh_token) {
         return { connected: false, connectedAt: null, expiresInDays: null, scopes: [] };
     }
-    const expiresInDays = tokens.expiry_date ? Math.round((tokens.expiry_date - Date.now()) / 86400000 * 10) / 10 : null;
+    const expiresInDays = tokens.refreshExpiresAt ? Math.round((tokens.refreshExpiresAt - Date.now()) / 86400000 * 10) / 10 : null;
     return {
         connected: true,
         connectedAt: tokens.savedAt,

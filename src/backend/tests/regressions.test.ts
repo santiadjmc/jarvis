@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import conversationManager from "../ai/ConversationManager";
 import toolRegistry from "../tools/registry";
+import { status as googleStatus } from "../agent/Google/googleAuth";
 import ProcessManager, { decideRestart } from "../ProcessManager";
 import aiOrchestrator from "../ai";
 import { addTask, listTasks } from "../agent/Scheduler/taskStore";
@@ -273,4 +274,29 @@ test("SIGTERM during a restart window shuts down instead of spawning a new child
     assert.equal(pm.restartKillTimer, null);
     await new Promise(r => setTimeout(r, 50));
     assert.equal(started, 0);
+});
+
+test("Google expiry nudge uses refresh-token lifetime, not the 1h access token (dev M1)", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = await mkdtemp(join(tmpdir(), "jarvis-google-"));
+    const previous = process.env.JARVIS_DATA_DIR;
+    process.env.JARVIS_DATA_DIR = dir;
+    try {
+        // Access token expired an hour ago; refresh token has no known expiry.
+        await writeFile(join(dir, "google_tokens.json"), JSON.stringify({
+            refresh_token: "r", access_token: "a", expiry_date: Date.now() - 3_600_000, savedAt: Date.now() - 7_200_000,
+        }));
+        assert.equal(googleStatus().expiresInDays, null);
+
+        await writeFile(join(dir, "google_tokens.json"), JSON.stringify({
+            refresh_token: "r", expiry_date: Date.now() - 3_600_000, savedAt: Date.now(), refreshExpiresAt: Date.now() + 3 * 86_400_000,
+        }));
+        assert.equal(googleStatus().expiresInDays, 3);
+    } finally {
+        if (previous === undefined) delete process.env.JARVIS_DATA_DIR;
+        else process.env.JARVIS_DATA_DIR = previous;
+        await rm(dir, { recursive: true, force: true });
+    }
 });
