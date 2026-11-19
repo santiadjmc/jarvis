@@ -314,6 +314,8 @@ class ChatController extends Notifier<ChatState> {
         state = state.copyWith(online: next.status == ConnectionStatus.connected);
         if (next.status == ConnectionStatus.connected) {
           ref.read(connectionControllerProvider.notifier).sendConfigGet('autoApprove');
+        } else if (prev?.status == ConnectionStatus.connected) {
+          _settleInterrupted();
         }
       }
     });
@@ -331,6 +333,32 @@ class ChatController extends Notifier<ChatState> {
       _messagesSub = null;
       _subscribed = false;
     });
+  }
+
+  /// The socket dropped: in-flight replies will not resume, so stop their
+  /// spinners and free the composer instead of leaving the request "active".
+  void _settleInterrupted() {
+    var changed = false;
+    _messages = _messages.map((m) {
+      if (m.role != MessageRole.assistant || m.complete) return m;
+      changed = true;
+      return _settleStrayTools(
+        m.copyWith(
+          complete: true,
+          clearStatus: true,
+          errorMessage: m.content.isEmpty ? 'Connection lost' : null,
+        ),
+        ToolStepStatus.failed,
+        'Connection lost',
+      );
+    }).toList();
+    _activeRequestId = null;
+    _voiceOriginatedRequestId = null;
+    _relistenFallback?.cancel();
+    _relistenFallback = null;
+    if (!changed) return;
+    state = state.copyWith(messages: _messages);
+    _schedulePersist();
   }
 
   void startVoiceInput() {
