@@ -19,7 +19,7 @@ npm install
 cp .env.example .env
 ```
 
-Fill in `JWT_SECRET`, `JARVIS_MASTER_KEY`, and your model endpoint in `.env`. A local Ollama instance is the simplest option:
+Set `JARVIS_MASTER_KEY` to a long random secret (for example `openssl rand -base64 48`) and point `AI_BASE_URL` at your model endpoint in `.env`. A local Ollama instance is the simplest option:
 
 ```bash
 ollama pull llama3.2

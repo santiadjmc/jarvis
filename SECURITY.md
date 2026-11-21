@@ -44,7 +44,7 @@ Jarvis is a local-first assistant and assumes a trusted network.
 - Do not expose the server directly to the internet. Put it behind a reverse proxy with TLS and strong authentication if remote access is required.
 - Keep `JARVIS_AUTO_APPROVE=0`. Risky tools are gated behind user approval for a reason.
 - Set `HOST=127.0.0.1` when you do not need LAN access from a phone.
-- Use long, random values for `JWT_SECRET` and `JARVIS_MASTER_KEY`.
+- Use a long, random value for `JARVIS_MASTER_KEY`.
 - Never commit `.env`. If a secret was committed, rotate it immediately and remove it from git history.
 - `fetch_url` blocks private and loopback addresses by default. Only set `JARVIS_FETCH_ALLOW_PRIVATE=1` if you accept the SSRF risk.
 - Review the Android permissions in `src/app/android/app/src/main/AndroidManifest.xml`. Disable device capabilities you do not use.
