@@ -8,8 +8,13 @@ if (!key) {
 }
 const approve = process.argv.includes("approve");
 const reconnect = process.argv.includes("reconnect");
-const url = `ws://${host}/ws`;
-const wsOptions = { headers: { Authorization: `Bearer ${key}` } };
+const scheme = process.env.JARVIS_WS_SCHEME || "ws";
+if (scheme !== "ws" && scheme !== "wss") {
+    console.error(`Invalid JARVIS_WS_SCHEME "${scheme}": use ws or wss`);
+    process.exit(2);
+}
+const url = `${scheme}://${host}/ws`;
+const wsOptions = { headers: { Authorization: `Bearer ${key}` }, rejectUnauthorized: process.env.JARVIS_WS_INSECURE_TLS !== "1" };
 
 const deviceId = mode === "device" ? "dev-sim-1" : "dev-sim-2";
 const deviceName = mode === "device" ? "Sim Phone" : "Sim Desktop";

@@ -268,6 +268,8 @@ All configuration lives in environment variables, loaded from `.env` in the repo
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `JARVIS_API_KEY` | *(required)* | API key used by the `tool/e2e_*.js` scripts. |
+| `JARVIS_WS_SCHEME` | `ws` | WebSocket scheme used by the `tool/e2e_*.js` scripts: `ws` or `wss` (for a server behind a TLS reverse proxy). |
+| `JARVIS_WS_INSECURE_TLS` | `0` | Set to `1` to let the `tool/e2e_*.js` scripts accept a self-signed or otherwise untrusted certificate over `wss`. |
 
 ## ✅ Tests and checks
 
@@ -294,12 +296,13 @@ flutter analyze
 flutter test
 ```
 
-Manual end-to-end scripts against a running server (they connect over plain `ws://`):
+Manual end-to-end scripts against a running server. They connect over plain `ws://` by default; set `JARVIS_WS_SCHEME=wss` to reach a server behind TLS, and add `JARVIS_WS_INSECURE_TLS=1` only if its certificate is self-signed:
 
 ```bash
 JARVIS_API_KEY=<key> node tool/e2e_ws.js 127.0.0.1:3000 "hello"
 JARVIS_API_KEY=<key> node tool/e2e_tts.js 127.0.0.1:3000 "say something"
 JARVIS_API_KEY=<key> node tool/e2e_device.js <host> <mode> <prompt>
+JARVIS_API_KEY=<key> JARVIS_WS_SCHEME=wss node tool/e2e_ws.js jarvis.example.com "hello"
 ```
 
 ## 🛡️ Security notes

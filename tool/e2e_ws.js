@@ -7,8 +7,13 @@ if (!key) {
     process.exit(2);
 }
 const approve = approveArg === "approve";
-const url = `ws://${host}/ws`;
-const wsOptions = { headers: { Authorization: `Bearer ${key}` } };
+const scheme = process.env.JARVIS_WS_SCHEME || "ws";
+if (scheme !== "ws" && scheme !== "wss") {
+    console.error(`Invalid JARVIS_WS_SCHEME "${scheme}": use ws or wss`);
+    process.exit(2);
+}
+const url = `${scheme}://${host}/ws`;
+const wsOptions = { headers: { Authorization: `Bearer ${key}` }, rejectUnauthorized: process.env.JARVIS_WS_INSECURE_TLS !== "1" };
 
 const ws = new WebSocket(url, wsOptions);
 const toolCalls = new Map();
